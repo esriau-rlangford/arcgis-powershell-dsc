@@ -59,6 +59,11 @@
         [System.String]
         $ServerLogsLocation = $null,
 
+        [parameter(Mandatory = $false)]
+        [ValidateSet("OFF","SEVERE","WARNING","INFO","FINE","VERBOSE","DEBUG")]
+        [System.String]
+        $LogLevel = 'WARNING',
+
         [Parameter(Mandatory=$False)]
         [System.String]
         $LocalRepositoryPath = $null,
@@ -254,6 +259,10 @@
         [Parameter(Mandatory=$false)]
         [System.String]
         $WebSocketContextUrl,
+
+        [Parameter(Mandatory=$false)]
+        [System.Int32]
+        $SocMaximumHeapSize = 0,
         
         [Parameter(Mandatory=$False)]
         [System.Boolean]
@@ -261,7 +270,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_xFirewall, ArcGIS_Server, ArcGIS_Service_Account, ArcGIS_GeoEvent, ArcGIS_WaitForComponent, ArcGIS_Server_TLS, ArcGIS_Server_RegisterDirectories,ArcGIS_HostNameSettings
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_xFirewall, ArcGIS_Server, ArcGIS_Service_Account, ArcGIS_GeoEvent, ArcGIS_WaitForComponent, ArcGIS_Server_TLS, ArcGIS_Server_RegisterDirectories,ArcGIS_HostNameSettings, ArcGIS_ServerMachineSettings
 
     if($UsesAzureFilesForConfigStore){
         $ConfigStorePos = $ConfigStoreAzureFilesCredentials.UserName.IndexOf('.blob.')
@@ -288,7 +297,6 @@
         
         $IsMultiMachineServer = (($AllNodes | Measure-Object).Count -gt 1)
 
-        $VersionArray = $Version.Split(".")
         $Depends = @()
         if($OpenFirewallPorts -or $IsMultiMachineServer ) # Server only deployment or behind an ILB or has DataStore nodes that need to register using admin			
         {
@@ -306,76 +314,7 @@
             }
             $Depends += '[ArcGIS_xFirewall]Server_FirewallRules'
         }
-        if($IsMultiMachineServer) 
-        {
-            if($ServerRole -ieq 'GeoAnalytics' -or ($ServerRole -ieq "GeneralPurposeServer" -and $AdditionalServerRoles -icontains "GeoAnalytics")) 
-            {  
-                $Depends += '[ArcGIS_xFirewall]GeoAnalytics_InboundFirewallRules' 
-                $Depends += '[ArcGIS_xFirewall]GeoAnalytics_OutboundFirewallRules' 
-
-                $GeoAnalyticsPorts = @("7077")
-                if($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -or $VersionArray[1] -gt 8)){
-                    $GeoAnalyticsPorts += @("12181","12182","12190")
-                }else{
-                    $GeoAnalyticsPorts += @("2181","2182","2190")
-                }
-
-                ArcGIS_xFirewall GeoAnalytics_InboundFirewallRules
-                {
-                    Name                  = "ArcGISGeoAnalyticsInboundFirewallRules" 
-                    DisplayName           = "ArcGIS GeoAnalytics" 
-                    DisplayGroup          = "ArcGIS GeoAnalytics" 
-                    Ensure                = 'Present'
-                    Access                = "Allow" 
-                    State                 = "Enabled" 
-                    Profile               = ("Domain","Private","Public")
-                    LocalPort             = $GeoAnalyticsPorts	# Spark and Zookeeper
-                    Protocol              = "TCP" 
-                }
-
-                ArcGIS_xFirewall GeoAnalytics_OutboundFirewallRules
-                {
-                    Name                  = "ArcGISGeoAnalyticsOutboundFirewallRules" 
-                    DisplayName           = "ArcGIS GeoAnalytics" 
-                    DisplayGroup          = "ArcGIS GeoAnalytics" 
-                    Ensure                = 'Present'
-                    Access                = "Allow" 
-                    State                 = "Enabled" 
-                    Profile               = ("Domain","Private","Public")
-                    LocalPort             = $GeoAnalyticsPorts	# Spark and Zookeeper
-                    Protocol              = "TCP" 
-                    Direction             = "Outbound"    
-                }
-
-                ArcGIS_xFirewall GeoAnalyticsCompute_InboundFirewallRules
-                {
-                    Name                  = "ArcGISGeoAnalyticsComputeInboundFirewallRules" 
-                    DisplayName           = "ArcGIS GeoAnalytics" 
-                    DisplayGroup          = "ArcGIS GeoAnalytics" 
-                    Ensure                = 'Present'
-                    Access                = "Allow" 
-                    State                 = "Enabled" 
-                    Profile               = ("Domain","Private","Public")
-                    LocalPort             = ("56540-56550")	# GA Compute
-                    Protocol              = "TCP" 
-                }
-
-                ArcGIS_xFirewall GeoAnalyticsCompute_OutboundFirewallRules
-                {
-                    Name                  = "ArcGISGeoAnalyticsComputeOutboundFirewallRules" 
-                    DisplayName           = "ArcGIS GeoAnalytics" 
-                    DisplayGroup          = "ArcGIS GeoAnalytics" 
-                    Ensure                = 'Present'
-                    Access                = "Allow" 
-                    State                 = "Enabled" 
-                    Profile               = ("Domain","Private","Public")
-                    LocalPort             = ("56540-56550")	# GA Compute
-                    Protocol              = "TCP" 
-                    Direction             = "Outbound"    
-                }
-            }
-        }
-
+        
         $DataDirs = @()
         # Only add config store location if not using Azure Files for config store or is not using a cloud provider for config store
         if($CloudProvider -ieq "None" -and -not($UsesAzureFilesForConfigStore)){
@@ -517,7 +456,7 @@
             Join =  if($Node.NodeName -ine $PrimaryServerMachine) { $true } else { $false } 
             PeerServerHostName = $PrimaryServerMachine
             DependsOn = $Depends
-            LogLevel = if($DebugMode) { 'DEBUG' } else { 'WARNING' }            
+            LogLevel = if($DebugMode) { 'DEBUG' } else { $LogLevel }         
             CloudProvider = $CloudProvider
             IsCloudNativeServer = $IsCloudNativeServer
             CloudNamespace = $CloudNamespace
@@ -554,6 +493,16 @@
             AzureCloudNativeServiceBusNamespaceRegionEndpointUrl = $AzureCloudNativeServiceBusNamespaceRegionEndpointUrl
         }
         $Depends += "[ArcGIS_Server]Server$($Node.NodeName)"
+
+        if($SocMaximumHeapSize -gt 0){
+            ArcGIS_ServerMachineSettings ServerSettings
+            {
+                ServerHostName   = $Node.NodeName
+                SiteAdministrator= $ServerPrimarySiteAdminCredential
+                SocMaximumHeapSize = $SocMaximumHeapSize
+            }
+            $Depends += "[ArcGIS_Server]Server$($Node.NodeName)"
+        }
         
         $ImportCertChainValue = $true  # default to true
         $ForceImportCertificate = $false
@@ -628,89 +577,6 @@
             }
             $Depends += "[ArcGIS_xFirewall]GeoEvent_FirewallRules"
             
-            if($IsMultiMachineServer -and ($VersionArray[0] -eq 10 -and $VersionArray[1] -lt 9))
-            {
-                ArcGIS_xFirewall GeoEvent_FirewallRules_Zookeeper
-				{
-					Name                  = "ArcGISGeoEventFirewallRulesClusterZookeeper" 
-					DisplayName           = "ArcGIS GeoEvent Extension Cluster Zookeeper" 
-					DisplayGroup          = "ArcGIS GeoEvent Extension" 
-					Ensure                = 'Present' 
-					Access                = "Allow" 
-					State                 = "Enabled" 
-					Profile               = ("Domain","Private","Public")
-					LocalPort             = ("4181","4182","4190")
-					Protocol              = "TCP" 
-				}
-
-				ArcGIS_xFirewall GeoEvent_FirewallRule_Zookeeper_Outbound
-				{
-					Name                  = "ArcGISGeoEventFirewallRulesClusterOutboundZookeeper" 
-					DisplayName           = "ArcGIS GeoEvent Extension Cluster Outbound Zookeeper" 
-					DisplayGroup          = "ArcGIS GeoEvent Extension" 
-					Ensure                = 'Present' 
-					Access                = "Allow" 
-					State                 = "Enabled" 
-					Profile               = ("Domain","Private","Public")
-					RemotePort            = ("4181","4182","4190")
-					Protocol              = "TCP" 
-					Direction             = "Outbound"    
-				}
-				$ServerDependsOn += @('[ArcGIS_xFirewall]GeoEvent_FirewallRule_Zookeeper_Outbound','[ArcGIS_xFirewall]GeoEvent_FirewallRules_Zookeeper')
-
-                $GeoEventPorts = ("27271","27272","27273","9191","9192","9193","9194","9220","9320","5565","5575")
-                if($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -or $VersionArray[1] -gt 8)){
-                    $GeoEventPorts += @("12181","12182","12190")
-                }else{
-                    $GeoEventPorts += @("2181","2182","2190")
-                }
-
-                ArcGIS_xFirewall GeoEvent_FirewallRules_MultiMachine
-                {
-                    Name                  = "ArcGISGeoEventFirewallRulesCluster" 
-                    DisplayName           = "ArcGIS GeoEvent Extension Cluster" 
-                    DisplayGroup          = "ArcGIS GeoEvent Extension" 
-                    Ensure                = "Present"
-                    Access                = "Allow" 
-                    State                 = "Enabled" 
-                    Profile               = ("Domain","Private","Public")
-                    LocalPort             = $GeoEventPorts
-                    Protocol              = "TCP" 
-                    DependsOn             = $Depends
-                }
-                $Depends += "[ArcGIS_xFirewall]GeoEvent_FirewallRules_MultiMachine"
-
-                ArcGIS_xFirewall GeoEvent_FirewallRules_MultiMachine_OutBound
-                {
-                    Name                  = "ArcGISGeoEventFirewallRulesClusterOutbound" 
-                    DisplayName           = "ArcGIS GeoEvent Extension Cluster Outbound" 
-                    DisplayGroup          = "ArcGIS GeoEvent Extension" 
-                    Ensure                =  "Present"
-                    Access                = "Allow" 
-                    State                 = "Enabled" 
-                    Profile               = ("Domain","Private","Public")
-                    RemotePort            = $GeoEventPorts
-                    Protocol              = "TCP" 
-                    Direction             = "Outbound"    
-                    DependsOn             = $Depends
-                }
-                $Depends += "[ArcGIS_xFirewall]GeoEvent_FirewallRules_MultiMachine_OutBound"
-
-                ArcGIS_xFirewall GeoEventGatewayService_Firewall
-                {
-                    Name                  = "ArcGISGeoEventGateway"
-                    DisplayName           = "ArcGIS GeoEvent Gateway"
-                    DisplayGroup          = "ArcGIS GeoEvent Extension"
-                    Ensure                = 'Present'
-                    Access                = "Allow"
-                    State                 = "Enabled"
-                    Profile               = ("Domain","Private","Public")
-                    LocalPort             = ("9092")
-                    Protocol              = "TCP"
-                    DependsOn             = $Depends
-                }
-                $Depends += "[ArcGIS_xFirewall]GeoEventGatewayService_Firewall"
-            }
             if($null -eq $WebSocketContextUrl -or $WebSocketContextUrl -eq ""){
                 $WebSocketContextUrl = "wss://$(Get-FQDN $Node.NodeName):6143/arcgis"
             }
@@ -719,12 +585,11 @@
             {
                 ServerHostName            = $Node.NodeName
                 Name	                  = 'ArcGIS GeoEvent'
-                Ensure	                  =  "Present"
+                Ensure	                  = "Present"
                 SiteAdministrator         = $ServerPrimarySiteAdminCredential
                 WebSocketContextUrl       = $WebSocketContextUrl
                 Version					  = $Version
                 DependsOn                 = $Depends
-                #SiteAdminUrl             = if($ConfigData.ExternalDNSName) { "https://$($ConfigData.ExternalDNSName)/arcgis/admin" } else { $null }
             }
         }
 
@@ -762,7 +627,7 @@
 
             if($IsMultiMachineServer){
                 $WfmPorts = @("9830", "9820", "9840", "9880")
-                if(($VersionArray[0] -gt 11) -or ($VersionArray[0] -ieq 11 -and $VersionArray[1] -ge 3)){
+                if([version]($Version) -ge "11.3"){
                     $WfmPorts = @("13820", "13830", "13840", "9880")
                 }
                 ArcGIS_xFirewall WorkflowManagerServer_FirewallRules_MultiMachine_OutBound

@@ -34,7 +34,7 @@
         Registry CloudPlatform
         {
           Ensure      = "Present"
-          Key         = "HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\ESRI\License12.0"
+          Key         = "HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\ESRI\License12.1"
           ValueName   = "CLOUD_PLATFORM"
           ValueData   = "AZURE"
         }
@@ -67,14 +67,7 @@
         }
         $Depends += "[Script]SetAutomaticPageFileManagement"
 
-        $ProImage = $false
-        if($Installers.Length -eq 3 -or $Installers.Length -eq 4){
-            foreach($Installer in $Installers){
-                if($Installer.Name -ieq "ArcGIS Pro"){
-                    $ProImage = $true
-                }
-            }
-        }
+        $ProImage = $Installers.Name -icontains "ArcGIS Pro"
         
         if(-not($ProImage))
         {

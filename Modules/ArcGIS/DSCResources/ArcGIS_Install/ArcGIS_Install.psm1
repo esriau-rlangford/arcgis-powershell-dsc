@@ -100,7 +100,7 @@ function Get-TargetResource
 		$Ensure
 	)
 
-	$null
+	@{}
 }
 
 function Set-TargetResource
@@ -218,7 +218,7 @@ function Set-TargetResource
             }
         }
 
-        if(($Name -ieq 'Pro' -or $Name -ieq 'Server') -and $DotnetDesktopRuntimePath -and (Test-Path $DotnetDesktopRuntimePath)){
+        if(($Name -ieq 'Pro' -or $Name -ieq 'Server' -or $Name -ieq 'GeoEnrichmentServer') -and $DotnetDesktopRuntimePath -and (Test-Path $DotnetDesktopRuntimePath)){
             # Install DotNet Desktop Runtime - exe package
             Write-Verbose "Installing DotNet Desktop Runtime."
             Invoke-StartProcess -ExecPath $DotnetDesktopRuntimePath -Arguments "/install /quiet /norestart" -Verbose
@@ -229,7 +229,7 @@ function Set-TargetResource
             # Check if Edge WebView 2 Runtime is already installed
             $EdgeWebView2RuntimeInstalled = "HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
             $EdgeWebView2Runtime64Installed = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
-            $EdgeWebView2Runtime32Installed = "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+            $EdgeWebView2Runtime32Installed = "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
             if(-not(Test-Path $EdgeWebView2RuntimeInstalled) -and -not(Test-Path $EdgeWebView2Runtime64Installed) -and -not(Test-Path $EdgeWebView2Runtime32Installed)){
                 # Install Edge Web View 2 Runtime - exe package
                 Write-Verbose "Installing Edge WebView 2 Runtime."
@@ -268,14 +268,14 @@ function Set-TargetResource
 
             Write-Verbose "Extracting $Path to $TempFolder"
             $ArgumentsList = "/s /d $TempFolder"
-            $VersionSplit = $Version.Split('.')
-            if($VersionSplit[0] -gt 11 -or ($VersionSplit[0] -eq 11 -and $VersionSplit[1] -gt 2)){
+            
+            if($Version -ieq "00" -or [version]$Version -ge "11.3"){
                 $ArgumentsList = "/s /d $TempFolder /x"
             }
             $SetupExtractProc = (Start-Process -FilePath $Path -ArgumentList $ArgumentsList -Wait -NoNewWindow  -Verbose -PassThru)
 
             if($SetupExtractProc.ExitCode -ne 0){
-                if(($VersionSplit[0] -gt 11 -or ($VersionSplit[0] -eq 11 -and $VersionSplit[1] -gt 2)) -and ($ComponentName -ieq "Server" -or $ComponentName -ieq "Portal")){
+                if(($Version -ieq "00" -or [version]$Version -ge "11.3") -and ($ComponentName -ieq "Server" -or $ComponentName -ieq "Portal")){
                     #TODO - generalize this at a later point
                     if(-not(Test-Path "$($Path).001")){
                         throw "Associated Volume of the setup is not found at $Path. Please make sure all the volumes are present in the same location"
@@ -312,8 +312,8 @@ function Set-TargetResource
             $ExecPath = "msiexec"
         }
 
-        if(($null -ne $ServiceCredential) -and (@("Server","Portal","WebStyles","DataStore","GeoEvent","NotebookServer","MissionServer","VideoServer","WorkflowManagerServer","WorkflowManagerWebApp","NotebookServerSamplesData", "Insights") -icontains $ComponentName)){
-            if(-not(@("WorkflowManagerServer","WorkflowManagerWebApp","GeoEvent","Insights") -icontains $ComponentName)){
+        if(($null -ne $ServiceCredential) -and (@("Server","Portal","WebStyles","DataStore","GeoEvent","NotebookServer","MissionServer","VideoServer","WorkflowManagerServer","NotebookServerSamplesData", "DataPipelinesServer","RealityServer","GeoEnrichmentServer") -icontains $ComponentName)){
+            if(-not(@("RealityServer","WorkflowManagerServer","GeoEvent") -icontains $ComponentName)){
                 $Arguments += " USER_NAME=$($ServiceCredential.UserName)"
             }
             
@@ -327,7 +327,7 @@ function Set-TargetResource
         if($FeatureSet.Count -gt 0){
             if(Test-ProductInstall -Name $Name -ProductId $ProductId -Version $Version -WebAdaptorContext $WebAdaptorContext){
                 if($Name -ieq "DataStore"){
-                    if(@("11.0","11.1","11.2","11.3","11.4","11.5","12.0") -iContains $Version){
+                    if([version]$Version -ge "11.0"){
                         $AddLocalFeatureSet, $RemoveFeatureSet = Test-DataStoreFeautureSet -FeatureSet $FeatureSet -DSInstalled $True
                         if($AddLocalFeatureSet.Count -gt 0){
                             $AddFeatureSetString = [System.String]::Join(",", $AddLocalFeatureSet)
@@ -344,7 +344,7 @@ function Set-TargetResource
                 }
             }else{
                 if($Name -ieq "DataStore"){
-                    if(@("11.0","11.1","11.2","11.3","11.4","11.5","12.0") -iContains $Version){
+                    if([version]$Version -ge "11.0"){
                         $AddLocalFeatureSet, $RemoveFeatureSet = Test-DataStoreFeautureSet -FeatureSet $FeatureSet -DSInstalled $False
                         $AddFeatureSetString = [System.String]::Join(",", $AddLocalFeatureSet)
                         $Arguments += " ADDLOCAL=$($AddFeatureSetString)"
@@ -419,10 +419,8 @@ function Set-TargetResource
             }
 
             # Stop IIS Service
-            Write-Verbose "Stop Service '$IISServiceName'"
-            Stop-Service -Name $IISServiceName -Force 
-            Write-Verbose 'Stopping the service' 
-            Wait-ForServiceToReachDesiredState -ServiceName $IISServiceName -DesiredState 'Stopped'
+            Write-Verbose "Stopping service '$IISServiceName'"
+            Wait-ForServiceToReachDesiredState -ServiceName $IISServiceName -DesiredState 'Stopped' -Verbose
             Write-Verbose 'Stopped the service'
         }
         
@@ -443,9 +441,7 @@ function Set-TargetResource
         if($IsWebAdaptorIIS){
             # Restart IIS Service
             Write-Verbose "Restarting Service '$IISServiceName'"
-            Start-Service -Name $IISServiceName
-            Write-Verbose 'Starting the service'
-            Wait-ForServiceToReachDesiredState -ServiceName $IISServiceName -DesiredState 'Running'
+            Wait-ForServiceToReachDesiredState -ServiceName $IISServiceName -DesiredState 'Running' -Verbose
             Write-Verbose 'Started the service'
 
             Import-Module WebAdministration | Out-Null
@@ -556,7 +552,7 @@ function Test-TargetResource
 	$result = Test-ProductInstall -Name $Name -ProductId $ProductId -Version $Version -WebAdaptorContext $WebAdaptorContext
     if($result -and $FeatureSet.Count -gt 0){
         if($Name -ieq "DataStore"){
-            if(@("11.0","11.1","11.2","11.3","11.4","11.5","12.0") -iContains $Version){
+            if([version]$Version -ge "11.0"){
                 $AddLocalFeatureSet, $RemoveFeatureSet = Test-DataStoreFeautureSet -FeatureSet $FeatureSet -DSInstalled $True
                 $result = ($AddLocalFeatureSet.Count -eq 0 -and $RemoveFeatureSet.Count -eq 0)
             }
@@ -564,7 +560,7 @@ function Test-TargetResource
             if($Version -ieq "10.9.1"){
                 # Get all the feature that are installed.
                 # Create an add and remove feature list
-            }elseif(@("11.0","11.1","11.2","11.3","11.4","11.5","12.0") -iContains $Version){
+            }elseif([version]$Version -ge "11.0"){
                 #Get all the feature that are installed.
                 #Create an add and remove feature list
             }
@@ -711,44 +707,6 @@ function Invoke-WebAdaptorIISPreRequsitesInstallation
         }else{
             Write-Verbose "Please check the Machine Operating System Compatatbilty"
         }
-    }
-}
-
-function Invoke-StartProcess
-{
-    [CmdletBinding()]
-	param
-	(
-		[parameter(Mandatory = $true)]
-		[System.String]
-		$ExecPath,
-
-		[parameter(Mandatory = $false)]
-		[System.String]
-        $Arguments
-    )
-
-    Write-Verbose "Executing $ExecPath"
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $ExecPath
-    $psi.Arguments = $Arguments
-    $psi.UseShellExecute = $false #start the process from it's own executable file    
-    $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-    $psi.RedirectStandardError = $true #enable the process to read from standard error 
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $p.WaitForExit()
-    $op = $p.StandardOutput.ReadToEnd()
-    if($op -and $op.Length -gt 0) {
-        Write-Verbose "Output:- $op"
-    }
-    $err = $p.StandardError.ReadToEnd()
-    if($err -and $err.Length -gt 0) {
-        Write-Verbose $err
-    }
-    if($p.ExitCode -eq 0) {                    
-        Write-Verbose "Install process finished successfully."
-    }else {
-        throw "Install failed. Process exit code:- $($p.ExitCode). Error - $err"
     }
 }
 

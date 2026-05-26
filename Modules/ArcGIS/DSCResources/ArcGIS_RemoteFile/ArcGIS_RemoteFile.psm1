@@ -5,6 +5,10 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Portal.psm1'))
+
 <#
     .SYNOPSIS
         Makes a request to the download a file from remote file storage server.
@@ -37,12 +41,12 @@ function Get-TargetResource
 		$Source,
         
         [Parameter(Mandatory=$true)]
-        [ValidateSet("AzureFiles","AzureBlobsManagedIdentity","ArcGISDownloadsAPI","Default")]
+        [ValidateSet("AzureFiles","AzureBlobsManagedIdentity","ArcGISDownloadsAPI","AzureSASUri","Default")]
 		[System.String]
         $FileSourceType
 	)
 	
-	$null	
+	@{}
 }
 
 function Set-TargetResource
@@ -58,7 +62,7 @@ function Set-TargetResource
         $Destination,
         
         [Parameter(Mandatory=$true)]
-        [ValidateSet("AzureFiles","AzureBlobsManagedIdentity","ArcGISDownloadsAPI","Default")]
+        [ValidateSet("AzureFiles","AzureBlobsManagedIdentity","ArcGISDownloadsAPI", "AzureSASUri","Default")]
 		[System.String]
         $FileSourceType,
 
@@ -104,11 +108,16 @@ function Set-TargetResource
 					$DownloadUrl = (Get-ArcGISDownloadAPIUrl -FileName $Source -ArcGISDownloadAPIFolderPath $ArcGISDownloadAPIFolderPath `
 										-ArcGISOnlineCredential $Credential -Verbose)
 				}
-				
+                
                 Write-Verbose "Downloading file to $Destination"
-                Invoke-DownloadFile -RemoteFileUrl $DownloadUrl -DestinationFilePath $Destination `
+                Get-RemoteFile -RemoteFileUrl $DownloadUrl -DestinationFilePath $Destination `
                                     -IsUsingAzureBlobManagedIndentity ($FileSourceType -ieq "AzureBlobsManagedIdentity") -Verbose
-            }else{
+            }elseif($FileSourceType -ieq "AzureSASUri"){
+                $DownloadUrl ="$($Credential.UserName.TrimEnd('\'))/$($Source)$($Credential.GetNetworkCredential().Password)"
+                Write-Verbose "Downloading file to $Destination"
+                Get-RemoteFile -RemoteFileUrl $DownloadUrl -DestinationFilePath $Destination -Verbose
+            }
+            else{
                 Write-Verbose "Copying file $Source to $Destination"
                 Copy-Item -Path $Source -Destination $Destination -Force
             }
@@ -135,7 +144,7 @@ function Test-TargetResource
         $Destination,
 
         [Parameter(Mandatory=$true)]
-        [ValidateSet("AzureFiles","AzureBlobsManagedIdentity","ArcGISDownloadsAPI","Default")]
+        [ValidateSet("AzureFiles","AzureBlobsManagedIdentity","ArcGISDownloadsAPI","AzureSASUri","Default")]
 		[System.String]
         $FileSourceType,
         
@@ -163,21 +172,25 @@ function Test-TargetResource
     }
 	if($Ensure -ieq 'Present') {
         if($result) {
-			if($FileSourceType -ieq "ArcGISDownloadsAPI" -or $Source.StartsWith('http', [System.StringComparison]::InvariantCultureIgnoreCase)){
+			if($FileSourceType -ieq "ArcGISDownloadsAPI" -or $Source.StartsWith('http', [System.StringComparison]::InvariantCultureIgnoreCase) -or $FileSourceType -ieq "AzureSASUri"){
                 Write-Verbose 'File Exists locally. Check if the remote URL has Changed using Last-Modified Header'
                 $HasRemoteFileChanged = $true
+                $DownloadUrl = $Source
+                if($FileSourceType -ieq "ArcGISDownloadsAPI"){
+                    $DownloadUrl = (Get-ArcGISDownloadAPIUrl -FileName $Source -ArcGISDownloadAPIFolderPath $ArcGISDownloadAPIFolderPath `
+                                        -ArcGISOnlineCredential $Credential -Verbose)
+                }
+                if($FileSourceType -ieq "AzureSASUri"){
+                    $DownloadUrl ="$($Credential.UserName.TrimEnd('\'))/$($Source)$($Credential.GetNetworkCredential().Password)"
+                }
+
+                $Request = [System.Net.HttpWebRequest]::CreateHttp($DownloadUrl)
                 $response = $null
                 try { 
-                    $DownloadUrl = $Source
-                    if($FileSourceType -ieq "ArcGISDownloadsAPI"){
-                        $DownloadUrl = (Get-ArcGISDownloadAPIUrl -FileName $Source -ArcGISDownloadAPIFolderPath $ArcGISDownloadAPIFolderPath `
-                                            -ArcGISOnlineCredential $Credential -Verbose)
-                    }
-
-                    $Request = [System.Net.HttpWebRequest]::CreateHttp($DownloadUrl)
                     $Request.Method = 'HEAD'
+                    $Request.Timeout = 20000
                     if($FileSourceType -ieq "AzureBlobsManagedIdentity"){
-                        $ManagedIdentityAccessToken = Get-ManagedIdentityAccessToken -Verbose
+                        $ManagedIdentityAccessToken = Get-AzureManagedIdentityStorageAccessToken -Verbose
                         $Request.Headers.Add("Authorization","Bearer $ManagedIdentityAccessToken")
                         $Request.Headers.Add("x-ms-version","2017-11-09")
                     }
@@ -190,7 +203,8 @@ function Test-TargetResource
                     [DateTime]$RemoteFileLastModTime = $response.Headers['Last-Modified']
                     if($RemoteFileLastModTime -le (Get-Item -Path $Destination).CreationTime) {
                         $HasRemoteFileChanged = $false
-                    }                    
+                    }
+                    $response.Dispose()                    
                 }
                 if($HasRemoteFileChanged) {
                     # File has changed - needs to be downloaded again
@@ -214,62 +228,6 @@ function Test-TargetResource
     }	
 }
 
-
-function Get-ManagedIdentityAccessToken
-{
-    $wc = New-Object System.Net.WebClient
-    $wc.Headers.Add('Metadata', "true")
-    $response = $wc.DownloadString('http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F')
-    $wc.Dispose()
-    return ($response | ConvertFrom-Json).access_token
-}
-
-function Invoke-DownloadFile
-{
-    param (
-        [System.String]
-        $RemoteFileUrl,
-        
-        [System.String]
-        $DestinationFilePath,
-
-        [System.Boolean]
-        $IsUsingAzureBlobManagedIndentity
-    )
-    try {
-        $wc = New-Object System.Net.WebClient;
-        if($IsUsingAzureBlobManagedIndentity){
-            $ManagedIdentityAccessToken = Get-ManagedIdentityAccessToken -Verbose
-            $wc.Headers.Add('Authorization', "Bearer $ManagedIdentityAccessToken")
-            $wc.Headers.Add("x-ms-version", "2017-11-09")
-        }
-        $response = $wc.DownloadFile($RemoteFileUrl, $DestinationFilePath)
-        $wc.Dispose()
-        $response
-    }
-    catch {
-        throw "Error downloading remote file. Error - $_"
-    }
-}
-function Get-AGOToken
-{
-    param(
-        [System.Management.Automation.PSCredential]
-        $ArcGISOnlineCredential
-    )
-
-    try {
-        $AGOToken = Invoke-ArcGISWebRequest -Url "https://www.arcgis.com/sharing/rest/generateToken" -HttpFormParameters @{ username = $ArcGISOnlineCredential.UserName; password = $ArcGISOnlineCredential.GetNetworkCredential().Password; client = 'referer'; referer = 'referer'; expiration = 600; f = 'json' } -Referer $Referer -TimeOutSec 45
-        if($AGOToken.error){
-            Write-Verbose "Error Response - $($token.error)"
-            throw [string]::Format("ERROR: Unable to get Token - {0}" , $token.error.message)
-        }
-        return $AGOToken
-    } catch {
-        throw "[ERROR]:- AGO at $url did not return a token - $_"
-    }
-}
-
 function Get-ArcGISDownloadAPIUrl
 {
     param(
@@ -284,21 +242,11 @@ function Get-ArcGISDownloadAPIUrl
     )
 
     $DownloadFileName = Split-Path $FileName -leaf
-    $token = Get-AGOToken -ArcGISOnlineCredential $ArcGISOnlineCredential -Verbose
+    $token = Get-PortalToken -Credential $ArcGISOnlineCredential -URL "https://www.arcgis.com" -Client "referer" -Expiration 600 -Referer "referer"
     $HttpFormParameters = @{Referer = 'referer'; folder = $ArcGISDownloadAPIFolderPath; token = $Token.token}
-    $HttpBody = ConvertTo-HttpBody $HttpFormParameters
-    $UrlWithQueryString = "https://downloads.arcgis.com/dms/rest/download/secured/$($DownloadFileName)"
-    if($UrlWithQueryString.IndexOf('?') -lt 0) {
-        $UrlWithQueryString += '?'
-    }else {
-        $UrlWithQueryString += '&'
-    }
-    $UrlWithQueryString += $HttpBody
-    $wc = New-Object System.Net.WebClient
-    $res = $wc.DownloadString($UrlWithQueryString)
-    $wc.Dispose()
-    if($res) {
-        $response = $res | ConvertFrom-Json
+    $DownloadAPIUrl = "https://downloads.arcgis.com/dms/rest/download/secured/$($DownloadFileName)"
+    $response = Invoke-ArcGISWebRequest -Url $DownloadAPIUrl -HttpFormParameters $HttpFormParameters -Referer $null -HttpMethod "GET" -verbose
+    if($response) {
         if($response.code -eq 200){
             return $response.url
         }else{

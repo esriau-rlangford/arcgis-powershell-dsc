@@ -59,7 +59,7 @@ function Get-TargetResource
 		$Ensure
 	)
 
-	$null
+	@{}
 }
 
 function Set-TargetResource
@@ -162,9 +162,7 @@ function Invoke-TestDownloadInstallPatch
         $PatchLocation = Join-Path $PatchesDir $Patch.FileName
         try {
             Write-Verbose "Downloading Patch $($Patch.Name) with QFE Id $QFEId"
-            $wc = New-Object System.Net.WebClient;
-            $wc.DownloadFile($Patch.PatchFileUrl, $PatchLocation)
-            $wc.Dispose()
+            Get-RemoteFile -RemoteFileUrl $Patch.PatchFileUrl -DestinationFilePath $PatchLocation -Verbose
         }
         catch {
             throw "Error downloading remote file. Error - $_"
@@ -309,9 +307,7 @@ function Get-PatchManifestFromESRIDownloads
 
     #TODO - Tackle multiple patches for a installer
     $ProductNameArray = @()
-    if($ProductName -ieq "Desktop"){
-        $ProductNameArray += "ArcMap"
-    }elseif($ProductName -ieq "DataStore"){
+    if($ProductName -ieq "DataStore"){
         $ProductNameArray += "ArcGIS Data Store"
     }elseif($ProductName -ieq "Portal"){
         $ProductNameArray += "Portal for ArcGIS"
@@ -332,13 +328,13 @@ function Get-PatchManifestFromESRIDownloads
     }elseif($ProductName -ieq "GeoEvent"){
         $ProductNameArray += "ArcGIS GeoEvent Server"
         $ProductNameArray += "GeoEvent"
+   }elseif($ProductName -ieq "DataPipelinesServer"){
+        $ProductNameArray += "ArcGIS Data Pipelines Server"
     }
 
     $MinifiedVersion = $Version.Replace(".","")
-    $wc = New-Object System.Net.WebClient
-    $PatchManifestJsonString = $wc.DownloadString("https://content.esri.com/patch_notification/patches.json")
-    $wc.Dispose()
-    $AllPatches = ConvertFrom-Json $PatchManifestJsonString
+    $PatchNotificationToolUrl = "https://content.esri.com/patch_notification/patches.json"
+    $AllPatches = Invoke-ArcGISWebRequest -Url $PatchNotificationToolUrl -Referer $null -HttpFormParameters @{} -HttpMethod "GET" -Verbose
 	$ParsedPatchesObject = [ordered]@{}
 	$AllPatchesForVersion = ($AllPatches.Product | Where-Object { $_.Version -ieq $Version })
 	if($null -ne $AllPatchesForVersion){
@@ -384,19 +380,12 @@ function Test-PatchInstalled
     )
     
     $RegPaths = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" ,
+       "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" ,
         "HKLM:\SOFTWARE\ESRI\Portal for ArcGIS\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\ArcGIS Data Store\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\ArcGIS Notebook Server\Updates\*",
         "HKLM:\SOFTWARE\ESRI\ArcGIS Mission Server\Updates\*",
         "HKLM:\SOFTWARE\ESRI\ArcGIS Video Server\Updates\*",
-        "HKLM:\SOFTWARE\ESRI\ArcGIS Insights\Updates\*" ,
-        "HKLM:\SOFTWARE\ESRI\Server10.3\Updates\*" ,
-        "HKLM:\SOFTWARE\ESRI\Server10.4\Updates\*" ,
-        "HKLM:\SOFTWARE\ESRI\Server10.5\Updates\*" ,
-        "HKLM:\SOFTWARE\ESRI\Server10.6\Updates\*" ,
-        "HKLM:\SOFTWARE\ESRI\Server10.7\Updates\*" ,
-        "HKLM:\SOFTWARE\ESRI\Server10.8\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\Server10.9\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\Server11.0\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\Server11.1\Updates\*" ,
@@ -405,9 +394,7 @@ function Test-PatchInstalled
         "HKLM:\SOFTWARE\ESRI\Server11.4\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\Server11.5\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\Server12.0\Updates\*" ,
-        "HKLM:\SOFTWARE\ESRI\GeoEvent10.6\Server\Updates\*",
-        "HKLM:\SOFTWARE\ESRI\GeoEvent10.7\Server\Updates\*",
-        "HKLM:\SOFTWARE\ESRI\GeoEvent10.8\Server\Updates\*",
+        "HKLM:\SOFTWARE\ESRI\Server12.1\Updates\*" ,
         "HKLM:\SOFTWARE\ESRI\GeoEvent10.9\Server\Updates\*",
         "HKLM:\SOFTWARE\ESRI\GeoEvent11.0\Server\Updates\*",
         "HKLM:\SOFTWARE\ESRI\GeoEvent11.1\Server\Updates\*",
@@ -416,15 +403,8 @@ function Test-PatchInstalled
         "HKLM:\SOFTWARE\ESRI\GeoEvent11.4\Server\Updates\*",
         "HKLM:\SOFTWARE\ESRI\GeoEvent11.5\Server\Updates\*",
         "HKLM:\SOFTWARE\ESRI\GeoEvent12.0\Server\Updates\*",
+        "HKLM:\SOFTWARE\ESRI\GeoEvent12.1\Server\Updates\*",
         "HKLM:\SOFTWARE\ESRI\ArcGISPro\Updates\*" ,
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\Desktop10.4\Updates\*" ,
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\Desktop10.5\Updates\*" ,
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\Desktop10.6\Updates\*" ,
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\Desktop10.7\Updates\*",
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\Desktop10.8\Updates\*",
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\ArcGIS Web Adaptor (IIS) 10.8\Updates\*",
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\ArcGIS Web Adaptor (IIS) 10.8.1\Updates\*",
-        "HKLM:\SOFTWARE\WOW6432Node\ESRI\ArcGIS Web Adaptor (IIS) 10.9\Updates\*",
         "HKLM:\SOFTWARE\WOW6432Node\ESRI\ArcGIS Web Adaptor (IIS) 10.9.1\Updates\*",
         "HKLM:\SOFTWARE\WOW6432Node\ESRI\ArcGIS Web Adaptor (IIS) 11.0\Updates\*",
         "HKLM:\SOFTWARE\ESRI\ArcGIS Web Adaptor (IIS) 11.1\Updates\*",
@@ -433,6 +413,7 @@ function Test-PatchInstalled
         "HKLM:\SOFTWARE\ESRI\ArcGIS Web Adaptor (IIS) 11.4\Updates\*",
         "HKLM:\SOFTWARE\ESRI\ArcGIS Web Adaptor (IIS) 11.5\Updates\*",
         "HKLM:\SOFTWARE\ESRI\ArcGIS Web Adaptor (IIS) 12.0\Updates\*"
+        "HKLM:\SOFTWARE\ESRI\ArcGIS Web Adaptor (IIS) 12.1\Updates\*"
     )
     
     foreach($RegPath in $RegPaths){
@@ -495,11 +476,9 @@ function Get-QFEId
         [System.String]
         $PatchLocation
     )
-
     if(-not(Test-Path $PatchLocation)){
         throw "Patch File $PatchLocation is not accessible"
     }
-    
     try{
         $wi = New-Object -com WindowsInstaller.Installer
         $mspdb = $wi.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $Null, $wi, $($PatchLocation, 32))

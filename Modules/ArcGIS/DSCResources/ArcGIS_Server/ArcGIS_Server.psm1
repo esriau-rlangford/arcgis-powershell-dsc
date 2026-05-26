@@ -5,6 +5,10 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
+
 function Get-TargetResource
 {
 	[CmdletBinding()]
@@ -24,7 +28,7 @@ function Get-TargetResource
 		$SiteAdministrator
 	)
 
-	$null
+	@{}
 }
 
 function Set-TargetResource
@@ -226,652 +230,136 @@ function Set-TargetResource
         [Parameter(Mandatory=$False)]
         [System.String]
         $AzureCloudNativeServiceBusNamespaceRegionEndpointUrl
-        
 	)
     
     if($VerbosePreference -ine 'SilentlyContinue') 
     {        
         Write-Verbose ("Site Administrator UserName:- " + $SiteAdministrator.UserName) 
-        #Write-Verbose ("PSA Password:- " + $SiteAdministrator.GetNetworkCredential().Password) 
     }
 
     $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
     Write-Verbose "Fully Qualified Domain Name :- $FQDN"
-
-	$ServiceName = Get-ArcGISServiceName -ComponentName 'Server'
-    $RegKey = Get-EsriRegistryKeyForService -ServiceName $ServiceName
-    $InstallDir = (Get-ItemProperty -Path $RegKey -ErrorAction Ignore).InstallDir
-    
-	[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
-	Write-Verbose "Waiting for Server 'https://$($FQDN):6443/arcgis/admin' to initialize"
-    Wait-ForUrl "https://$($FQDN):6443/arcgis/admin" -HttpMethod 'GET'
-    Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/rest/info/healthCheck?f=json" -HttpMethod 'GET'
+    $ServerBaseURL = Get-ArcGISComponentBaseURL -ComponentName "Server" -FQDN $FQDN
+    [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
+	Write-Verbose "Waiting for Server '$($ServerBaseURL)'"
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseURL -ComponentName "Server" -Verbose
 
     if($Ensure -ieq 'Present') {
-       
-        $Referer = 'http://localhost' 
-        Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/rest/info/healthCheck?f=json" -HttpMethod 'GET'
-
-        $ServerUrl = "https://$($FQDN):6443"
-        Write-Verbose "Checking for site on '$ServerUrl'"
+        $Referer = 'https://localhost' 
+        Write-Verbose "Checking for site on '$ServerBaseURL'"
         $siteExists = $false
-        try {  
-            $token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer 
-            $siteExists = ($null -ne $token.token)
-        }
-        catch {
-            Write-Verbose "[WARNING] GetToken returned:- $_"
+        $siteExists = Test-ServerSiteCreated -URL $ServerBaseURL -Referer $Referer -Verbose
+        if($siteExists){
+            Write-Verbose "ArcGIS Server exists: $($siteExists)"
+            try {
+                $token = Get-ServerToken -URL $ServerBaseURL -Credential $SiteAdministrator -Referer $Referer 
+                if($null -eq $token.token){
+                    throw "Unable to retrieve token for administrator."
+                }
+            }catch {
+                Write-Verbose "[WARNING] Get-ServerToken returned:- $_"
+            }
+        }else{
+            Write-Verbose "Unable to detect if site exists."
         }
 
-        if($Join) {
-            if(-not($siteExists)) {
+        if(-not($siteExists)) {
+            if($Join) {
                 Write-Verbose 'Joining to Server Site'
-                Join-Site -ServerName $PeerServerHostName -Credential $SiteAdministrator -Referer $Referer -CurrentMachineServerHostName $FQDN -Version $Version
+                Invoke-JoinSite -URL $ServerBaseURL -Credential $SiteAdministrator -Referer $Referer `
+                                -ServerType "Server" -PrimaryServerHostName $PeerServerHostName -Verbose
                 Write-Verbose 'Joined to Server Site'
             }else{
-                Write-Verbose "Skipping Join site operation. $FQDN already belongs to a site."
-            }
-        }else {
-            if(-not($siteExists)) {
-                [int]$Attempt = 1
-                [bool]$Done = $false
-                while(-not($Done) -and ($Attempt -le 3)) {                
-                    try {
-						Write-Verbose 'Creating Site'
-						if($Attempt -gt 1) {
-							Write-Verbose "Attempt # $Attempt"   
-						}            
-
-                        $ServerArgs = @{
-                            ServerURL = $ServerUrl
-                            Credential = $SiteAdministrator
-                            ConfigurationStoreLocation = $ConfigurationStoreLocation
-                            ServerDirectoriesRootLocation = $ServerDirectoriesRootLocation
-                            ServerDirectories = $ServerDirectories
-                            LocalRepositoryPath = $LocalRepositoryPath
-                            ServerLogsLocation = $ServerLogsLocation
-                            LogLevel = $LogLevel                            
-                        }
-						
-                        if($CloudProvider -ine "None"){
-                            $CloudServerArgs = @{
-                                CloudProvider = $CloudProvider
-                                CloudNamespace = $CloudNamespace
-                            }
-							
-                            if($IsCloudNativeServer){
-                                $CloudServerArgs["CloudNativeTags"] = $CloudNativeTags
-                                $CloudServerArgs["CloudNativeLocalDirectory"] = $CloudNativeLocalDirectory
-                            }
-
-                            if($CloudProvider -ieq "AWS"){
-                                $CloudServerArgs["AWSCloudAuthenticationType"] = $AWSCloudAuthenticationType
-                                $CloudServerArgs["AWSRegion"] = $AWSRegion
-
-                                if($AWSCloudAuthenticationType -ieq "AccessKey"){
-                                    $CloudServerArgs["AWSCloudAccessKeyCredential"] = $AWSCloudAccessKeyCredential
-                                }
-
-                                if($IsCloudNativeServer){
-                                    $CloudServerArgs["AWSCloudNativeS3BucketName"] = $AWSCloudNativeS3BucketName
-                                    $CloudServerArgs["AWSCloudNativeS3RegionEndpointURL"] = $AWSCloudNativeS3RegionEndpointURL
-                                    $CloudServerArgs["AWSCloudNativeS3RootDir"] = $AWSCloudNativeS3RootDir
-                                    $CloudServerArgs["AWSCloudNativeDynamoDBRegionEndpointURL"] = $AWSCloudNativeDynamoDBRegionEndpointURL
-                                    $CloudServerArgs["AWSCloudNativeQueueServiceRegionEndpointURL"] = $AWSCloudNativeQueueServiceRegionEndpointURL
-
-                                    $ServerArgs["CloudConfigJsonString"] = Get-CloudNativeConfigJson @CloudServerArgs
-                                }else{
-                                    $ConfigStoreCloudArgs = Get-CloudConfigStoreJson @CloudServerArgs
-
-                                    $ServerArgs["ConfigStoreCloudStorageConnectionString"] = $ConfigStoreCloudArgs["ConfigStoreCloudStorageConnectionString"]
-                                    $ServerArgs["ConfigStoreCloudStorageConnectionSecret"] = $ConfigStoreCloudArgs["ConfigStoreCloudStorageConnectionSecret"]
-                                }
-                            }
-                            elseif($CloudProvider -ieq "AZURE"){
-                                $CloudServerArgs["AzureCloudAuthenticationType"] = $AzureCloudAuthenticationType
-
-                                if($AzureCloudAuthenticationType -ieq "ServicePrincipal"){
-                                    $CloudServerArgs["AzureCloudServicePrincipalCredential"] = $AzureCloudServicePrincipalCredential
-                                    $CloudServerArgs["AzureCloudServicePrincipalTenantId"] = $AzureCloudServicePrincipalTenantId
-                                    $CloudServerArgs["AzureCloudServicePrincipalAuthorityHost"] = $AzureCloudServicePrincipalAuthorityHost
-                                }
-                                if($AzureCloudAuthenticationType -ieq "UserAssignedIdentity"){
-                                    $CloudServerArgs["AzureCloudUserAssignedIdentityClientId"] = $AzureCloudUserAssignedIdentityClientId
-                                }
-                                
-                                if($IsCloudNativeServer){
-                                    if($AzureCloudAuthenticationType -ieq "AccessKey"){
-                                        $CloudServerArgs["AzureCloudNativeStorageAccountCredential"] = $AzureCloudNativeStorageAccountCredential
-                                        $CloudServerArgs["AzureCloudNativeCosmosDBAccountCredential"] = $AzureCloudNativeCosmosDBAccountCredential
-                                        $CloudServerArgs["AzureCloudNativeServiceBusNamespaceCredential"] = $AzureCloudNativeServiceBusNamespaceCredential
-                                    }
-
-                                    if($AzureCloudAuthenticationType -ieq "SASToken"){
-                                        throw "SASToken is not supported for Native Cloud Storage"
-                                    }
-
-                                    $CloudServerArgs["AzureCloudNativeStorageAccountContainerName"] = $AzureCloudNativeStorageAccountContainerName
-                                    $CloudServerArgs["AzureCloudNativeStorageAccountRootDir"] = $AzureCloudNativeStorageAccountRootDir
-                                    $CloudServerArgs["AzureCloudNativeStorageAccountAccountEndpointUrl"] = $AzureCloudNativeStorageAccountAccountEndpointUrl
-                                    if($AzureCloudNativeStorageAccountRegionEndpointUrl){
-                                        $CloudServerArgs["AzureCloudNativeStorageAccountRegionEndpointUrl"] = $AzureCloudNativeStorageAccountRegionEndpointUrl
-                                    }
-                                    
-                                    $CloudServerArgs["AzureCloudNativeCosmosDBAccountEndpointUrl"] = $AzureCloudNativeCosmosDBAccountEndpointUrl
-                                    if($AzureCloudNativeCosmosDBRegionEndpointUrl){
-                                        $CloudServerArgs["AzureCloudNativeCosmosDBRegionEndpointUrl"] = $AzureCloudNativeCosmosDBRegionEndpointUrl
-                                    }
-
-                                    $CloudServerArgs["AzureCloudNativeCosmosDBAccountDatabaseId"] = $AzureCloudNativeCosmosDBAccountDatabaseId
-                                    if(-not([string]::IsNullOrEmpty($AzureCloudNativeCosmosDBAccountSubscriptionId))){
-                                        $CloudServerArgs["AzureCloudNativeCosmosDBAccountSubscriptionId"] = $AzureCloudNativeCosmosDBAccountSubscriptionId
-                                    }
-                                    if(-not([string]::IsNullOrEmpty($AzureCloudNativeCosmosDBAccountResourceGroupName))){
-                                        $CloudServerArgs["AzureCloudNativeCosmosDBAccountResourceGroupName"] = $AzureCloudNativeCosmosDBAccountResourceGroupName
-                                    }
-                                    $CloudServerArgs["AzureCloudNativeCosmosDBAccountConnectionMode"] = $AzureCloudNativeCosmosDBAccountConnectionMode
-
-                                    
-                                    $CloudServerArgs["AzureCloudNativeServiceBusNamespaceEndpointUrl"] = $AzureCloudNativeServiceBusNamespaceEndpointUrl
-                                    if($AzureCloudNativeServiceBusNamespaceRegionEndpointUrl){
-                                        $CloudServerArgs["AzureCloudNativeServiceBusNamespaceRegionEndpointUrl"] = $AzureCloudNativeServiceBusNamespaceRegionEndpointUrl
-                                    }
-
-                                    $ServerArgs["CloudConfigJsonString"] = Get-CloudNativeConfigJson @CloudServerArgs
-                                }
-								else{
-									$CloudServerArgs["AzureCloudStorageAccountCredential"] = $AzureCloudStorageAccountCredential
-                                    $ConfigStoreCloudArgs = Get-CloudConfigStoreJson @CloudServerArgs
-
-                                    $ServerArgs["ConfigStoreCloudStorageConnectionString"] = $ConfigStoreCloudArgs["ConfigStoreCloudStorageConnectionString"]
-                                    $ServerArgs["ConfigStoreCloudStorageConnectionSecret"] = $ConfigStoreCloudArgs["ConfigStoreCloudStorageConnectionSecret"]
-                                }
-                            }
-                        }
-						
-                        Invoke-CreateSite @ServerArgs -Verbose
-
-                        $Done = $true
-                        Write-Verbose 'Site created.' 
-                    }
-                    catch {
-                        Write-Verbose "[WARNING] Error while creating site on attempt $Attempt Error:- $_"
-                        if($Attempt -lt 1) {
-                            # If the site failed to create because of permissions. Restart the service and try again
-                            Restart-ArcGISService -ServiceName $ServiceName -Verbose
-
-							Write-Verbose "Waiting for Server 'https://$($FQDN):6443/arcgis/admin' to initialize"
-                            Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/admin" -HttpMethod 'GET'
-                            Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/rest/info/healthCheck?f=json" -HttpMethod 'GET'
-                        }else {
-                            Write-Verbose "[WARNING] Unable to create Site. Error:- $_"
-                            if($_.ToString().IndexOf('The remote name could not be resolved') -gt -1) {
-								if($Attempt -ge 3) {
-									$err = "Failed to create site after multiple attempts due to network initialization. Please retry using the back and finish buttons"
-								}else {
-									Write-Verbose "Possible networking initialization error." # ArcGIS Server was not able to resolve the host (networking race conditions). Retry
-								}
-                            } else {
-                                $err = $_
-                                Write-Verbose $err
-                            }
-                            $retryTime = if($ConfigStoreCloudStorageConnectionString){ 120 }else{ 45 }
-                            Write-Verbose "Retrying site creation after $retryTime seconds"
-                            Start-Sleep -Seconds $retryTime
-                        }
-                        if($Attempt -ge 3){
-                            throw $_
-                        }
-                    }
-                    $Attempt = $Attempt + 1
+                 $ServerArgs = @{
+                    ServerType = "Server"
+                    Version = $Version
+                    URL = $ServerBaseURL
+                    Credential = $SiteAdministrator
+                    ConfigurationStoreLocation = $ConfigurationStoreLocation
+                    ServerDirectoriesRootLocation = $ServerDirectoriesRootLocation
+                    ServerDirectories = $ServerDirectories
+                    LocalRepositoryPath = $LocalRepositoryPath
+                    ServerLogsLocation = $ServerLogsLocation
+                    LogLevel = $LogLevel
+                    CloudProvider = $CloudProvider
+                    CloudNamespace = $CloudNamespace
+                    AWSCloudAuthenticationType = $AWSCloudAuthenticationType
+                    AWSRegion = $AWSRegion
+                    AWSCloudAccessKeyCredential = $AWSCloudAccessKeyCredential
+                    AzureAuthenticationType = $AzureCloudAuthenticationType
+                    AzureServicePrincipalCredential = $AzureCloudServicePrincipalCredential
+                    AzureServicePrincipalTenantId = $AzureCloudServicePrincipalTenantId
+                    AzureServicePrincipalAuthorityHost = $AzureCloudServicePrincipalAuthorityHost
+                    AzureUserAssignedIdentityClientId = $AzureCloudUserAssignedIdentityClientId
+                    AzureStorageAccountCredential = if($IsCloudNativeServer){ $AzureCloudNativeStorageAccountCredential}else{ $AzureCloudStorageAccountCredential }
+                    # All system directories are in cloud services
+                    UseCloudServicesSystemDirectories = $IsCloudNativeServer
+                    CloudServiceTags = $CloudNativeTags
+                    LocalDirectory = $CloudNativeLocalDirectory
+                    AWSS3BucketName = $AWSCloudNativeS3BucketName
+                    AWSS3RegionEndpointURL = $AWSCloudNativeS3RegionEndpointURL
+                    AWSS3RootDir = $AWSCloudNativeS3RootDir
+                    AWSDynamoDBRegionEndpointURL = $AWSCloudNativeDynamoDBRegionEndpointURL
+                    AWSQueueServiceRegionEndpointURL = $AWSCloudNativeQueueServiceRegionEndpointURL
+                    AzureCosmosDBAccountCredential = $AzureCloudNativeCosmosDBAccountCredential
+                    AzureServiceBusNamespaceCredential = $AzureCloudNativeServiceBusNamespaceCredential
+                    AzureStorageAccountContainerName = $AzureCloudNativeStorageAccountContainerName
+                    AzureStorageAccountRootDir = $AzureCloudNativeStorageAccountRootDir
+                    AzureStorageAccountAccountEndpointUrl = $AzureCloudNativeStorageAccountAccountEndpointUrl
+                    AzureStorageAccountRegionEndpointUrl = $AzureCloudNativeStorageAccountRegionEndpointUrl
+                    AzureCosmosDBAccountEndpointUrl = $AzureCloudNativeCosmosDBAccountEndpointUrl
+                    AzureCosmosDBRegionEndpointUrl = $AzureCloudNativeCosmosDBRegionEndpointUrl
+                    AzureCosmosDBAccountDatabaseId = $AzureCloudNativeCosmosDBAccountDatabaseId
+                    AzureCosmosDBAccountSubscriptionId = $AzureCloudNativeCosmosDBAccountSubscriptionId        
+                    AzureCosmosDBAccountResourceGroupName = $AzureCloudNativeCosmosDBAccountResourceGroupName
+                    AzureCosmosDBAccountConnectionMode = $AzureCloudNativeCosmosDBAccountConnectionMode
+                    AzureServiceBusNamespaceEndpointUrl = $AzureCloudNativeServiceBusNamespaceEndpointUrl
+                    AzureServiceBusNamespaceRegionEndpointUrl = $AzureCloudNativeServiceBusNamespaceRegionEndpointUrl
                 }
+
+                Invoke-CreateSite @ServerArgs -Verbose
+                
             }
+            
+            Write-Verbose "Waiting for server '$($ServerBaseURL)' health check."
+            Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server" -MaxWaitTimeInSeconds 180 
+        }else{
+            Write-Verbose "Site already exists."
+        }
 
-            if(-not($Join)) {
-				Write-Verbose "Waiting for Server 'https://$($FQDN):6443/arcgis/admin' to initialize"
-                Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/admin" -Verbose -MaxWaitTimeInSeconds 180 -HttpMethod 'GET'
-                Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/rest/info/healthCheck?f=json" -HttpMethod 'GET'
-                #Write-Verbose "Get Server Token" 
-                $token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer  
-                #Write-Verbose "Got Server Token $($token.token)" 
-            }
-
-            Write-Verbose "Waiting for Server 'https://$($FQDN):6443/arcgis/admin' to initialize"
-            Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/admin" -HttpMethod 'GET'
-            Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/rest/info/healthCheck?f=json" -HttpMethod 'GET'
-
+        if(-not($Join)){
+        
             #Write-Verbose 'Get Server Token'   
-            $token = Get-ServerToken -ServerEndPoint "https://$($FQDN):6443" -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer
+            $token = Get-ServerToken -URL $ServerBaseURL -Credential $SiteAdministrator -Referer $Referer
 
 			Write-Verbose "Ensuring Log Level $LogLevel"	
-            $logSettings = Get-LogSettings -ServerURL $ServerUrl -Token $token.token -Referer $Referer
+            $logSettings = Get-LogSettings -URL $ServerBaseURL -Token $token.token -Referer $Referer
             Write-Verbose "Current Log Level:- $($logSettings.settings.logLevel)"
 
-            if($logSettings.settings.logLevel -ine $LogLevel -or ($logSettings.settings.usageMeteringEnabled -ne $EnableUsageMetering) -or (-not([string]::IsNullOrEmpty($ServerLogsLocation)) -and ($logSettings.settings.logDir.TrimEnd("/") -ne $ServerLogsLocation.TrimEnd("/"))) ) {
+            $CurrentLogDir = ([string]$logSettings.settings.logDir).TrimEnd([char[]]@('\','/'))
+            $DesiredLogDir = ([string]$ServerLogsLocation).TrimEnd([char[]]@('\','/'))
+        
+            if($logSettings.settings.logLevel -ine $LogLevel -or ($logSettings.settings.usageMeteringEnabled -ne $EnableUsageMetering) -or (-not([string]::IsNullOrEmpty($ServerLogsLocation)) -and ($CurrentLogDir -ne $DesiredLogDir)) ) {
                 if(-not([string]::IsNullOrEmpty($ServerLogsLocation))){
                     $logSettings.settings.logDir = $ServerLogsLocation
                 }
                 $logSettings.settings.logLevel = $LogLevel
                 $logSettings.settings.usageMeteringEnabled = $EnableUsageMetering
                 Write-Verbose "Updating log level to $($logSettings.settings.logLevel), log dir to $($logSettings.settings.logDir) and usageMeteringEnabled to $($logSettings.settings.usageMeteringEnabled)"
-                Update-LogSettings -ServerURL "https://$($FQDN):6443" -Token $token.token -Referer $Referer -logSettings $logSettings.settings 
+                Update-LogSettings -URL $ServerBaseURL -Token $token.token -Referer $Referer -logSettings $logSettings.settings -ServerType "Server"
                 Write-Verbose "Updated log level to $($logSettings.settings.logLevel), log dir to $($logSettings.settings.logDir) and usageMeteringEnabled to $($logSettings.settings.usageMeteringEnabled)"
             }
         }
     }
     elseif($Ensure -ieq 'Absent') {
         Write-Verbose 'Deleting Site'
-        Invoke-DeleteSite -ServerURL "https://$($FQDN):6443" -Credential $SiteAdministrator
+        Invoke-DeleteSite -URL $ServerBaseURL -Credential $SiteAdministrator -Verbose
         Write-Verbose 'Deleted Site'
 
         Write-Verbose "Deleting contents of $ConfigStoreRootLocation"
         Remove-Item $ConfigurationStoreLocation -Recurse -Force
         Write-Verbose "Deleted contents of $ServerDirectoriesRootLocation"  
         Remove-Item $ServerDirectoriesRootLocation -Recurse -Force
-    }
-}
-
-function Get-CloudNativeConfigJson
-{
-    [CmdletBinding()]
-    param(
-        [parameter(Mandatory = $True)]    
-        [System.String]
-        [ValidateSet("Azure","AWS")]
-        $CloudProvider,
-
-        [parameter(Mandatory = $false)]
-        [System.String]
-        $CloudNamespace,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $CloudNativeTags,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $CloudNativeLocalDirectory,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        [ValidateSet("AccessKey","IAMRole", "None")]
-        $AWSCloudAuthenticationType = "None",
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AWSRegion,
-
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AWSCloudAccessKeyCredential,
-        
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AWSCloudNativeS3BucketName,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AWSCloudNativeS3RegionEndpointURL,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AWSCloudNativeS3RootDir,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AWSCloudNativeDynamoDBRegionEndpointURL,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AWSCloudNativeQueueServiceRegionEndpointURL,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        [ValidateSet("AccessKey","ServicePrincipal","UserAssignedIdentity", "SASToken", "None")]
-        $AzureCloudAuthenticationType = "None",
-        
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AzureCloudServicePrincipalCredential,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudServicePrincipalTenantId,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudServicePrincipalAuthorityHost,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudUserAssignedIdentityClientId,
-        
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AzureCloudStorageAccountCredential,
-
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AzureCloudNativeStorageAccountCredential,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeStorageAccountContainerName,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeStorageAccountRootDir,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeStorageAccountAccountEndpointUrl,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeStorageAccountRegionEndpointUrl,
-
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AzureCloudNativeCosmosDBAccountCredential,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeCosmosDBAccountEndpointUrl,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeCosmosDBRegionEndpointUrl,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeCosmosDBAccountDatabaseId,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeCosmosDBAccountSubscriptionId,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeCosmosDBAccountResourceGroupName,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        [ValidateSet("Direct","Gateway")]
-        $AzureCloudNativeCosmosDBAccountConnectionMode = "Gateway",
-
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AzureCloudNativeServiceBusNamespaceCredential,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeServiceBusNamespaceEndpointUrl,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudNativeServiceBusNamespaceRegionEndpointUrl
-    )
-
-
-    # Cloud Native Server
-    $CloudConfigJson = @{
-        name = $CloudProvider.ToUpper()
-        namespace = $CloudNamespace
-    }
-
-    if(-not([string]::IsNullOrEmpty($CloudNativeTags))){
-        [System.Array]$tags = (ConvertFrom-Json $CloudNativeTags)
-        $CloudConfigJson['cloudServiceTags'] = $tags
-    }
-
-    if(-not([string]::IsNullOrEmpty($CloudNativeLocalDirectory))){
-        $CloudConfigJson["localDirectory"] = $CloudNativeLocalDirectory
-    }
-
-    if($CloudProvider -ieq "Azure"){
-        
-        if($AzureCloudAuthenticationType -ieq "ServicePrincipal"){
-            $CloudConfigJson["credential"] = @{
-                type = "SERVICE-PRINCIPAL"
-                authorityHost = $AzureCloudServicePrincipalAuthorityHost
-                secret = @{
-                    tenantId = $AzureCloudServicePrincipalTenantId
-                    clientId = $AzureCloudServicePrincipalCredential.UserName
-                    clientSecret = $AzureCloudServicePrincipalCredential.GetNetworkCredential().Password
-                }
-            }
-        }elseif($AzureCloudAuthenticationType -ieq "UserAssignedIdentity"){
-            $CloudConfigJson["credential"] = @{
-                type = "USER-ASSIGNED-IDENTITY"
-                secret = @{
-                    managedIdentityClientId = $AzureCloudUserAssignedIdentityClientId
-                }
-            }
-        }
-        
-        $StorageAccount = @{
-            "name" = "Azure Blob Store"
-            "type" = "objectStore"
-            "usage" = "DEFAULT"
-            "category" = "storage"
-            "connection" = @{
-                "containerName" = $AzureCloudNativeStorageAccountContainerName
-                "rootDir" = $AzureCloudNativeStorageAccountRootDir
-                "accountEndpointUrl" = $AzureCloudNativeStorageAccountAccountEndpointUrl
-            }
-        }
-        
-        if($CloudNativeServerAzureStorageAccountRegionEndpointUrl){
-            $StorageAccount.connection["regionEndpointUrl"] = $AzureCloudNativeStorageAccountRegionEndpointUrl
-        }
-
-        if($AzureCloudAuthenticationType -ieq "AccessKey"){
-            $StorageAccount.connection["credential"] = @{
-                type = "STORAGE-ACCOUNT-KEY"
-                secret = @{
-                    "storageAccountName"= $AzureCloudNativeStorageAccountCredential.UserName
-                    "storageAccountKey"= $AzureCloudNativeStorageAccountCredential.GetNetworkCredential().Password
-                }
-            }            
-        }
-
-        $CosmosDB = @{
-            "name" = "Azure Cosmos DB"
-            "type" = "tableStore"
-            "category" = "storage"
-            "connection" = @{
-                "accountEndpointUrl" = $AzureCloudNativeCosmosDBAccountEndpointUrl
-                "databaseId" = $AzureCloudNativeCosmosDBAccountDatabaseId
-                "cosmosDBConnectionMode" = $AzureCloudNativeCosmosDBAccountConnectionMode
-            }
-        }
-        if($CloudNativeServerAzureCosmosDBRegionEndpointUrl){
-            $CosmosDB.connection["regionEndpointUrl"] = $AzureCloudNativeCosmosDBRegionEndpointUrl
-        }
-
-        if($AzureCloudAuthenticationType -ieq "AccessKey"){
-            $CosmosDB.connection["credential"] = @{
-                type = "COSMOSDB-ACCOUNT-KEY"
-                secret = @{
-                    accountName = $AzureCloudNativeCosmosDBAccountCredential.UserName
-                    accountKey = $AzureCloudNativeCosmosDBAccountCredential.GetNetworkCredential().Password
-                }
-            }
-        }else{
-            if(-not([string]::IsNullOrEmpty($AzureCloudNativeCosmosDBAccountSubscriptionId)) -and -not([string]::IsNullOrEmpty($AzureCloudNativeCosmosDBAccountResourceGroupName))){
-                $CosmosDB.connection["subscriptionId"] = $AzureCloudNativeCosmosDBAccountSubscriptionId
-                $CosmosDB.connection["resourceGroupName"] = $AzureCloudNativeCosmosDBAccountResourceGroupName
-            }
-        }
-
-        $ServiceBus = @{
-            "name" = "Azure Service Bus"
-            "type" = "queueService"
-            "category" = "queue"
-            "connection" = @{
-                "serviceBusEndpointUrl" = $AzureCloudNativeServiceBusNamespaceEndpointUrl
-            }
-        }
-        if($CloudNativeServerAzureServiceBusNamespaceRegionEndpointUrl){
-            $ServiceBus.connection["regionEndpointUrl"] = $AzureCloudNativeServiceBusNamespaceRegionEndpointUrl
-        }
-
-        if($AzureCloudAuthenticationType -ieq "AccessKey"){
-            $ServiceBus.connection["credential"] = @{
-                type = "SERVICEBUS-ACCESS-KEY"
-                secret = @{
-                    "sharedAccessKeyName" = $AzureCloudNativeServiceBusNamespaceCredential.UserName
-                    "sharedAccessKey" = $AzureCloudNativeServiceBusNamespaceCredential.GetNetworkCredential().Password
-                }
-            }
-        }
-
-        $CloudConfigJson["cloudServices"] = @( $StorageAccount, $CosmosDB, $ServiceBus )
-    }
-
-    if($CloudProvider -ieq "AWS"){
-        $CloudConfigJson["region"] = $AWSRegion 
-
-        $AWSCredential = @{
-            type = if($AWSCloudAuthenticationType -ieq "IAMRole") { "IAM-ROLE" } else { "ACCESS-KEY" }
-        }
-        if($AWSCloudAuthenticationType -ieq "AccessKey"){
-            $AWSCredential["secret"] = @{
-                accessKey = $AWSCloudAccessKeyCredential.UserName
-                secretKey = $AWSCloudAccessKeyCredential.GetNetworkCredential().Password
-            }
-        }
-        $CloudConfigJson["credential"] = $AWSCredential
-        $CloudConfigJson["cloudServices"] = @(
-            @{
-                "name"= "AWS S3"
-                "type"=  "objectStore"
-                "usage"= "DEFAULT"
-                "connection" = @{
-                    "bucketName" = $AWSCloudNativeS3BucketName
-                    "regionEndpointUrl" = $AWSCloudNativeS3RegionEndpointURL
-                    "rootDir" = $AWSCloudNativeS3RootDir
-                }
-                "category" = "storage"
-            },
-            @{
-                "name" = "Amazon Dynamo DB"
-                "type" = "tableStore"
-                "connection" = @{
-                    "regionEndpointUrl" = $AWSCloudNativeDynamoDBRegionEndpointURL
-                }
-                "category" = "storage"
-            },
-            @{
-                "name" = "Amazon Queue Service"
-                "type" = "queueService"
-                "connection" = @{
-                    "regionEndpointUrl" = $AWSCloudNativeQueueServiceRegionEndpointURL
-                }
-                "category" = "queue"
-            }
-        )
-    }
-
-    return (ConvertTo-Json -Compress -InputObject @($CloudConfigJson) -Depth 10)
-}
-
-function Get-CloudConfigStoreJson
-{
-    [CmdletBinding()]
-    param(
-        [parameter(Mandatory = $True)]    
-        [System.String]
-        [ValidateSet("Azure","AWS")]
-        $CloudProvider,
-
-        [parameter(Mandatory = $false)]
-        [System.String]
-        $CloudNamespace,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        [ValidateSet("AccessKey","IAMRole", "None")]
-        $AWSCloudAuthenticationType = "None",
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AWSRegion,
-
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AWSCloudAccessKeyCredential,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        [ValidateSet("AccessKey","ServicePrincipal","UserAssignedIdentity", "SASToken", "None")]
-        $AzureCloudAuthenticationType = "None",
-
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AzureCloudServicePrincipalCredential,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudServicePrincipalTenantId,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudServicePrincipalAuthorityHost,
-
-        [Parameter(Mandatory=$False)]
-        [System.String]
-        $AzureCloudUserAssignedIdentityClientId,
-        
-        [Parameter(Mandatory=$False)]
-        [System.Management.Automation.PSCredential]
-        $AzureCloudStorageAccountCredential
-    )
-
-    $ConfigStoreCloudStorageConnectionString = ""
-    $ConfigStoreCloudStorageConnectionSecret = ""
-    if($CloudProvider -ieq "AWS"){
-        $ConfigStoreCloudStorageConnectionString="NAMESPACE=$($CloudNamespace);REGION=$($AWSRegion);"
-        if($AWSCloudAuthenticationType -ieq 'AccessKey'){
-            $ConfigStoreCloudStorageConnectionSecret="ACCESS_KEY_ID=$($AWSCloudAccessKeyCredential.UserName);SECRET_KEY=$($AWSCloudAccessKeyCredential.GetNetworkCredential().Password);"
-        }
-    }
-
-    if($CloudProvider -ieq "Azure"){
-        $AccountName = $AzureCloudStorageAccountCredential.UserName
-        $EndpointSuffix = ''
-        $Pos = $AzureCloudStorageAccountCredential.UserName.IndexOf('.blob.')
-        if($Pos -gt -1) {
-            $AccountName = $AzureCloudStorageAccountCredential.UserName.Substring(0, $Pos)
-            $EndpointSuffix = $AzureCloudStorageAccountCredential.UserName.Substring($Pos + 6) # Remove the hostname and .blob. suffix to get the storage endpoint suffix
-            $EndpointSuffix = ";EndpointSuffix=$($EndpointSuffix)"
-        }
-    
-        $ConfigStoreCloudStorageConnectionString = "NAMESPACE=$($CloudNamespace)$($EndpointSuffix);DefaultEndpointsProtocol=https;AccountName=$($AccountName)"
-        if($AzureCloudAuthenticationType -ieq 'ServicePrincipal'){
-            $ClientSecret = $AzureCloudServicePrincipalCredential.GetNetworkCredential().Password
-            $ConfigStoreCloudStorageConnectionString += ";CredentialType=ServicePrincipal;TenantId=$($AzureCloudServicePrincipalTenantId);ClientId=$($AzureCloudServicePrincipalCredential.Username)"
-            if(-not([string]::IsNullOrEmpty($AzureCloudServicePrincipalAuthorityHost))){
-                $ConfigStoreCloudStorageConnectionString += ";AuthorityHost=$($AzureCloudServicePrincipalAuthorityHost)" 
-            }
-            $ConfigStoreCloudStorageConnectionSecret = "ClientSecret=$($ClientSecret)"
-        }elseif($AzureCloudAuthenticationType -ieq 'UserAssignedIdentity'){
-            $ConfigStoreCloudStorageConnectionString += ";CredentialType=UserAssignedIdentity;ManagedIdentityClientId=$($AzureCloudUserAssignedIdentityClientId)"
-            $ConfigStoreCloudStorageConnectionSecret = ""
-        }elseif($AzureCloudAuthenticationType -ieq 'SASToken'){
-            $SASToken = $AzureCloudStorageAccountCredential.GetNetworkCredential().Password
-            $ConfigStoreCloudStorageConnectionString += ";CredentialType=SASToken"
-            $ConfigStoreCloudStorageConnectionSecret = "SASToken=$($SASToken)"
-            
-        }else{
-            $AccountKey = $AzureCloudStorageAccountCredential.GetNetworkCredential().Password
-            $ConfigStoreCloudStorageConnectionSecret = "AccountKey=$($AccountKey)"
-        }
-    }   
-
-    return @{
-        ConfigStoreCloudStorageConnectionString = $ConfigStoreCloudStorageConnectionString
-        ConfigStoreCloudStorageConnectionSecret = $ConfigStoreCloudStorageConnectionSecret
     }
 }
 
@@ -1080,34 +568,38 @@ function Test-TargetResource
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
     $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
     Write-Verbose "Fully Qualified Domain Name :- $FQDN" 
-    $Referer = 'http://localhost'
-    $ServerUrl = "https://$($FQDN):6443"
+    $Referer = 'https://localhost'
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+    
     $result = $false
-    try {        
-        Write-Verbose "Checking for site on '$ServerUrl'"
-        Wait-ForUrl -Url $ServerUrl -SleepTimeInSeconds 5 -HttpMethod 'GET'  
-        Wait-ForUrl -Url "https://$($FQDN):6443/arcgis/rest/info/healthCheck?f=json" -HttpMethod 'GET'
-        $token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer 
-        $result = ($null -ne $token.token)
-        if($result){
-            Write-Verbose "Site Exists. Was able to retrieve token for PSA"
-        }else{
-            Write-Verbose "Unable to detect if Site Exists. Was NOT able to retrieve token for PSA"
+    Write-Verbose "Checking for site on '$ServerBaseURL'"
+    $result = Test-ServerSiteCreated -URL $ServerBaseURL -Referer $Referer -Verbose
+    if($result){
+        Write-Verbose "Server site exists."
+        try {
+            $token = Get-ServerToken -URL $ServerBaseURL -Credential $SiteAdministrator -Referer $Referer 
+            if($null -eq $token.token){
+                throw "Unable to retrieve token for administrator."
+            }
+        }catch {
+            Write-Verbose "[WARNING] Get-ServerToken returned:- $_"
         }
-    }
-    catch {
-        Write-Verbose "[WARNING]:- $($_)"
+    }else{
+        Write-Verbose "Unable to detect if Site Exists."
     }
 
     if($result -and $LogLevel){
         #Write-Verbose "Token $($token.token)"
-        $logSettings = Get-LogSettings -ServerURL $ServerUrl -Token $token.token -Referer $Referer
+        $logSettings = Get-LogSettings -URL $ServerBaseURL -Token $token.token -Referer $Referer
         Write-Verbose "Current Log Level $($logSettings.settings.logLevel)"
         if($logSettings.settings.logLevel -ine $LogLevel) {
             Write-Verbose "Current Log Level $($logSettings.settings.logLevel) not set to '$LogLevel'"
             $result = $false
         }
-        if($result -and -not([string]::IsNullOrEmpty($ServerLogsLocation)) -and ($logSettings.settings.logDir.TrimEnd("/") -ne $ServerLogsLocation.TrimEnd("/"))){
+
+        $CurrentLogDir = ([string]$logSettings.settings.logDir).TrimEnd([char[]]@('\','/'))
+        $DesiredLogDir = ([string]$ServerLogsLocation).TrimEnd([char[]]@('\','/'))
+        if($result -and -not([string]::IsNullOrEmpty($ServerLogsLocation)) -and ($CurrentLogDir -ne $DesiredLogDir)){
             Write-Verbose "Current Server Log Directory $($logSettings.settings.logDir.TrimEnd("/")) not set to '$($ServerLogsLocation.TrimEnd("/"))'"
             $result = $false
         }
@@ -1123,377 +615,6 @@ function Test-TargetResource
     elseif($Ensure -ieq 'Absent') {        
         (-not($result))
     }
-}
-
-
-<#
-    .SYNOPSIS
-        Makes a request to the installed Server to create a New Server Site
-    .PARAMETER ServerURL
-        Url of Server
-    .PARAMETER UserName
-        UserName of the Primary Site Administrator
-    .PARAMETER Password
-        Password of the Primary Site Administrator
-    .PARAMETER ConfigurationStoreLocation
-        Path to Configuration store - Can be a Physical Location or Network Share Address
-    .PARAMETER ServerDirectoriesRootLocation
-         Path to Server Directories - Can be a Physical Location or Network Share Address
-    .PARAMETER TimeOut
-        Time in Seconds after the web request to the server for creating site Times out i.e. return an error after the said period for a response
-#>
-
-
-function Invoke-CreateSite
-{    
-    [CmdletBinding()]
-    Param
-    (
-        [System.String]
-        $ServerURL,
-
-        [System.Management.Automation.PSCredential]
-        $Credential, 
-
-        [System.String]
-        $ConfigurationStoreLocation,
-
-        [System.String]
-        $ConfigStoreCloudStorageConnectionString,
-
-        [System.String]
-        $ConfigStoreCloudStorageConnectionSecret,
-
-        [System.String]
-        $ServerDirectoriesRootLocation,
-
-        [System.String]
-        $ServerDirectories,
-        
-        [System.String]
-        $LocalRepositoryPath,
-
-        [System.String]
-        $CloudConfigJsonString,
-
-        [System.Int32]
-        $TimeOut = 1000,
-        
-        [System.String]
-        $ServerLogsLocation,
-
-        [System.String]
-        $LogLevel = "WARNING"
-    )
-
-    $createNewSiteUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/createNewSite"
-    $baseHostUrl       = $ServerURL.TrimEnd("/") + "/"
-
-    $requestParams = @{ 
-        f = "json"
-        username = $Credential.UserName
-        password = $Credential.GetNetworkCredential().Password
-        runAsync = "false"
-    }
-
-    if([string]::IsNullOrEmpty($CloudConfigJsonString)){
-        if($ConfigStoreCloudStorageConnectionString -and $ConfigStoreCloudStorageConnectionString.Length -gt 0){
-            if($ConfigStoreCloudStorageConnectionString.IndexOf('AccountName=') -gt -1){
-                Write-Verbose "Using Azure Cloud Storage for the config store"
-                $configStoreConnection = @{ 
-                    type= "AZURE"; 
-                    connectionString = $ConfigStoreCloudStorageConnectionString;
-                }
-
-                if($ConfigStoreCloudStorageConnectionSecret -and $ConfigStoreCloudStorageConnectionSecret.Length -gt 0){
-                    $configStoreConnection.Add("connectionSecret",$ConfigStoreCloudStorageConnectionSecret)
-                }
-            }else{
-                Write-Verbose "Using AWS Cloud Storage for the config store"
-                $configStoreConnection = @{ 
-                    type= "AMAZON"; 
-                    connectionString = $ConfigStoreCloudStorageConnectionString;
-                }
-
-                if($ConfigStoreCloudStorageConnectionSecret -and $ConfigStoreCloudStorageConnectionSecret.Length -gt 0){
-                    $configStoreConnection.Add("connectionSecret",$ConfigStoreCloudStorageConnectionSecret)
-                }
-            }
-            $Timeout = 2 * $Timeout # Double the timeout if using cloud storage for the config store        
-        }else{
-            Write-Verbose "Using File System Based Storage for the config store"
-            $configStoreConnection = @{ type= "FILESYSTEM"; connectionString = $ConfigurationStoreLocation }
-        }
-
-        if(-not([string]::IsNullOrEmpty($LocalRepositoryPath ))){  
-            $configStoreConnection["localRepositoryPath"] = $LocalRepositoryPath
-        }
-        $requestParams['configStoreConnection']  = ConvertTo-Json $configStoreConnection -Compress -Depth 4
-
-        $ServerDirectoriesObject = (ConvertFrom-Json $ServerDirectories)
-        $directories = @{directories = @()}
-
-        $directories.directories += if(($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgissystem"}| Measure-Object).Count -gt 0){
-            ($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgissystem"})
-        }else{
-            @{ name = "arcgissystem";
-                physicalPath = "$ServerDirectoriesRootLocation\arcgissystem";
-                directoryType = "SYSTEM";
-                cleanupMode = "NONE";
-                maxFileAge = 0
-            }
-        }
-
-        $directories.directories += if(($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgisjobs"}| Measure-Object).Count -gt 0){
-            ($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgisjobs"})
-        }else{
-            @{ name = "arcgisjobs";
-                physicalPath = "$ServerDirectoriesRootLocation\arcgisjobs";
-                directoryType = "JOBS";
-                cleanupMode = "TIME_ELAPSED_SINCE_LAST_MODIFIED";
-                maxFileAge = 360
-            }
-        }
-
-        $directories.directories += if(($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgisoutput"}| Measure-Object).Count -gt 0){
-            ($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgisoutput"})
-        }else{
-            @{ name = "arcgisoutput";
-                physicalPath = "$ServerDirectoriesRootLocation\arcgisoutput";
-                directoryType = "OUTPUT";
-                cleanupMode = "TIME_ELAPSED_SINCE_LAST_MODIFIED";
-                maxFileAge = 10
-            }
-        }
-
-        $directories.directories += if(($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgiscache"}| Measure-Object).Count -gt 0){
-            ($ServerDirectoriesObject | Where-Object {$_.name -ieq "arcgiscache"})
-        }else{
-            @{ name = "arcgiscache";
-                physicalPath = "$ServerDirectoriesRootLocation\arcgiscache";
-                directoryType = "CACHE";
-                cleanupMode = "NONE";
-                maxFileAge = 0
-            }
-        }
-        
-        $requestParams['directories'] = ConvertTo-Json $directories -Compress
-    }else{
-        $requestParams['cloudConfigJson'] = $CloudConfigJsonString
-    }
-
-    if(-not([string]::IsNullOrEmpty($ServerLogsLocation))){           
-        $requestParams["logsSettings"] = (ConvertTo-Json -Compress -InputObject @{
-            logLevel= $LogLevel;
-            logDir= $ServerLogsLocation;
-            maxErrorReportsCount= 10;
-            maxLogFileAge= 90
-        })
-    }
-	
-    # make sure Tomcat is up and running BEFORE sending a request
-    Write-Verbose "Waiting for Server 'https://$($FQDN):6443/arcgis/admin' to initialize"
-    Wait-ForUrl -Url $baseHostUrl -SleepTimeInSeconds 5 -HttpMethod 'GET'
-
-    $httpRequestBody = ConvertTo-HttpBody -props $requestParams
-    #Write-Verbose $requestParams
-    $response = Invoke-RestMethod -Method Post -Uri $createNewSiteUrl -Body $httpRequestBody -TimeoutSec $TimeOut
-    Write-Verbose "Response from CreateSite:- $($response | ConvertTo-Json)"
-	$responseMessages = ($response.messages -join ', ')
-	if ($response.status -and ($response.status -ieq "error")) { 
-        throw "CreateSite Failed. Error:- $responseMessages"
-    }
-}
-
-
-function Get-LogSettings
-{
-    [CmdletBinding()]
-    Param
-    (
-        [System.String]
-        $ServerURL, 
-
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $Referer
-    )
-
-    $GetLogSettingsUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/logs/settings"
-    $params = @{ f = 'json'; token = $Token; }
-    $response = Invoke-ArcGISWebRequest -Url $GetLogSettingsUrl -HttpFormParameters $params -Referer $Referer
-    Write-Verbose "Response from GetLogSettings:- $($response.Content)"
-    Confirm-ResponseStatus $response 
-    $response    
-}
-
-function Update-LogSettings
-{
-    [CmdletBinding()]
-    Param
-    (
-        [System.String]
-        $ServerURL, 
-
-        [System.String]
-        $Token, 
-
-        [System.String]
-        $Referer,
-
-        $logSettings
-    )    
-    $usageMeteringEnabled = if($logSettings.usageMeteringEnabled) { 'on' } else { 'off' } # API uses a checkbox and hence need to provide on/off values
-    $UpdateLogSettingsUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/logs/settings/edit"
-    $props = @{ f= 'json'; token = $Token; logDir = $logSettings.logDir; logLevel = $logSettings.logLevel; 
-                maxLogFileAge = $logSettings.maxLogFileAge; maxErrorReportsCount = $logSettings.maxErrorReportsCount;
-                usageMeteringEnabled = $usageMeteringEnabled }
-    $response = Invoke-ArcGISWebRequest -Url $UpdateLogSettingsUrl -HttpFormParameters $props -Referer $Referer
-    Confirm-ResponseStatus $response
-    $response
-}
-
-function Join-Site
-{ 
-    [CmdletBinding()]
-    Param
-    (
-        [System.String]
-        $ServerName,
-
-        [System.String]
-        $ClusterName="default",
-
-        [System.Management.Automation.PSCredential]
-        $Credential,
-
-        [System.String]
-        $Referer,
-
-        [System.String]
-        $CurrentMachineServerHostName,
-
-        [System.String]
-        $Version
-    )
-
-    $ServerFQDN = Get-FQDN $ServerName
-
-	$SiteServerURL = "https://$($ServerFQDN):6443/arcgis/admin"
-	$LocalAdminURL = "https://localhost:6443/arcgis/admin"
-	$JoinSiteUrl   = "$LocalAdminURL/joinSite"
-
-	$JoinSiteParams = @{ adminURL= $SiteServerURL; f = 'json'; username = $Credential.UserName; password = $Credential.GetNetworkCredential().Password }
-
-	Write-Verbose "Waiting for Site Server URL $SiteServerUrl to respond"
-	Wait-ForUrl $SiteServerUrl -Verbose    
-                  
-	Write-Verbose "Waiting for Local Admin URL $LocalAdminURL to respond"
-	Wait-ForUrl $LocalAdminURL -Verbose  
-    
-    $NumAttempts        = 0           
-	$SleepTimeInSeconds = 30
-	$Success            = $false
-	$Done               = $false
-	while ((-not $Done) -and ($NumAttempts++ -lt 5)){               
-        $response = Invoke-ArcGISWebRequest -Url $JoinSiteUrl -HttpFormParameters $JoinSiteParams -Referer $Referer -TimeOutSec 360
-		if($response) {
-			if ($response -and $response.status -and ($response.status -ine "error")) {
-                if($response.pollAfter){
-                    Start-Sleep -Seconds $response.pollAfter
-                }
-				$Done    = $true
-				$Success = $true
-				break
-			}
-		}
-    
-		Write-Verbose "Attempt # $NumAttempts failed."
-		if ($response.status)   { Write-Verbose "`tStatus   : $($response.status)."   }
-		if ($response.messages) { Write-Verbose "`tMessages : $($response.messages)." }
-		Write-Verbose "Retrying after $SleepTimeInSeconds seconds..."
-        Start-Sleep -Seconds $SleepTimeInSeconds 
-	}
-
-    if(-not($Success)){
-		throw "Failed to Join Site after multiple attempts. Error on last attempt:- $($response.messages)"
-	}
-
-	Write-Verbose "Successfully Joined Site:- $SiteServerURL"  
-	Write-Verbose "Waiting for Site Server URL $SiteServerUrl to respond"
-
-	Start-Sleep -Seconds 30  # Wait for Server to come back up
-
-	##
-	## Adding site (might) restart the server instance (Wait for admin endpoint to comeback up)
-	##
-	$LocalMachineFQDN = "https://$($CurrentMachineServerHostName):6443/arcgis/admin/"
-	Write-Verbose "Waiting for Machine URL $LocalMachineFQDN to respond"
-	Wait-ForUrl $LocalMachineFQDN -Verbose
-  
-	Write-Verbose "Waiting for Site Server URL $SiteServerUrl to respond"
-	Wait-ForUrl $SiteServerUrl -Verbose   
-  
-	####### Get new token 
-	$token = Get-ServerToken -ServerEndPoint "https://localhost:6443" -ServerSiteName 'arcgis' -Credential $Credential -Referer $Referer 
-    
-    ####### Add to cluster
-    $VersionArray = $Version.Split(".")
-
-    if($VersionArray[0] -eq 10 -and $VersionArray[1] -lt 8){
-        Write-Verbose "Adding machine '$CurrentMachineServerHostName' to cluster '$clusterName'"  
-        $AddMachineUrl  = "$LocalAdminURL/clusters/$clusterName/machines/add" 
-        $AddMachineParams = @{ token = $token.token; f = 'json';machineNames = $CurrentMachineServerHostName }
-
-        $NumAttempts        = 1 
-        $SleepTimeInSeconds = 30
-        $Success            = $false
-        $Done               = $false
-        while ((-not $Done) -and ($NumAttempts++ -le 3)){
-            $response = Invoke-ArcGISWebRequest -Url $AddMachineUrl -HttpFormParameters $AddMachineParams -Referer $Referer -TimeOutSec 180
-            if ($response -and $response.status -and ($response.status -ine "error")) {
-                $Done    = $true
-                $Success = $true
-                break
-            }
-        
-            Write-Verbose "Attempt # $NumAttempts failed."
-            if ($response.status)   { Write-Verbose "`tStatus   : $($response.status)."   }
-            if ($response.messages) { Write-Verbose "`tMessages : $($response.messages)." }
-            Write-Verbose "Retrying after $SleepTimeInSeconds seconds..."
-            Start-Sleep -Seconds $SleepTimeInSeconds 
-        }
-
-        if(-not($Success)){
-            throw "Failed to add machine to cluster. Error on last attempt:- $($response.messages)"
-        }
-
-        Write-Verbose "Machine '$CurrentMachineServerHostName' is added to cluster '$clusterName'"
-    }
-}  
-
-function Invoke-DeleteSite
-{    
-    [CmdletBinding()]
-    Param
-    (
-        [System.String]
-        $ServerURL,
-
-        [System.Management.Automation.PSCredential]
-        $Credential,
-
-        [System.Int32]
-        $TimeOut = 300
-    )
-
-    $Referer = $ServerURL
-    $token = Get-ServerToken -ServerEndPoint $ServerURL -ServerSiteName 'arcgis' -Credential $Credential -Referer $Referer
-    $DeleteSiteUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/deleteSite" 
-    $response = Invoke-ArcGISWebRequest -Url $DeleteSiteUrl -HttpFormParameters @{ f= 'json'; token = $token.token; } -Referer $Referer -TimeOutSec $TimeOut
-    Write-Verbose ($response.messages -join ', ') 
 }
 
 Export-ModuleMember -Function *-TargetResource

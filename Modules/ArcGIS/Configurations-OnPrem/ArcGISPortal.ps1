@@ -108,11 +108,12 @@
 
         [Parameter(Mandatory=$False)]
         [System.Boolean]
-        $EnableHSTS = $False,
-
-        [Parameter(Mandatory=$False)]
-        [System.Boolean]
         $UsesSSL = $False,
+
+        [parameter(Mandatory = $false)]
+        [ValidateSet("OFF","SEVERE","WARNING","INFO","FINE","VERBOSE","DEBUG")]
+        [System.String]
+        $LogLevel = 'WARNING',
         
         [Parameter(Mandatory=$False)]
         [System.Boolean]
@@ -120,7 +121,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_xFirewall, ArcGIS_Portal, ArcGIS_Service_Account, ArcGIS_WaitForComponent, ArcGIS_Portal_TLS, ArcGIS_HostNameSettings
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_xFirewall, ArcGIS_Portal, ArcGIS_Service_Account, ArcGIS_WaitForComponent, ArcGIS_Portal_TLS, ArcGIS_HostNameSettings
 
     if($CloudStorageType -ieq 'AzureFiles')
     {
@@ -157,12 +158,11 @@
         }
         $Depends += @('[ArcGIS_xFirewall]Portal_FirewallRules')
         
-        $VersionArray = $Version.Split('.')
         if($IsMultiMachinePortal) 
         {
             $PortalInboundPort = ("7120","7220", "7005", "7099", "7199", "5701", "5702", "5703") # Elastic Search uses 7120,7220 and Postgres uses 7654 for replication, Hazelcast uses 5701 and 5702 (extra 2 
             $PortalOutboundPort = ("7120","7220","5701", "5702", "5703")  # Elastic Search uses 7120,7220, Hazelcast uses 5701 and 5702
-            if(($VersionArray[0] -gt 11) -or ($VersionArray[0] -ieq 11 -and $VersionArray[1] -ge 3)){ # 11.3 or later, Hazelcast was replaced by ignite
+            if([version]$Version -ge "11.3"){ # 11.3 or later, Hazelcast was replaced by ignite
                 $PortalInboundPort = ("7120","7220", "7005", "7099", "7199")
                 $PortalOutboundPort = ("7120","7220")
             }
@@ -196,7 +196,7 @@
             }  
             $Depends += @('[ArcGIS_xFirewall]Portal_Database_InBound')
 
-            if(($VersionArray[0] -gt 11) -or ($VersionArray[0] -ieq 11 -and $VersionArray[1] -ge 3)){ # 11.3 or later
+            if([version]$Version -ge "11.3"){ # 11.3 or later
                 ArcGIS_xFirewall Portal_Ignite_OutBound
                 {
                     Name                  = "PortalforArcGIS-Ignite-Outbound" 
@@ -360,7 +360,7 @@
             IsHAPortal = if($IsMultiMachinePortal){ $true } else { $false }
             PeerMachineHostName = if($Node.NodeName -ine $PrimaryPortalMachine) { $PrimaryPortalMachine } else { "" } #add peer machine name
             EnableDebugLogging = if($DebugMode) { $true } else { $false }
-            LogLevel = if($DebugMode) { 'DEBUG' } else { 'WARNING' }
+            LogLevel = if($DebugMode) { 'DEBUG' } else { $LogLevel }
             EnableCreateSiteDebug = if($DebugMode) { $true } else { $false }
             CloudProvider =  if($CloudStorageType -ieq 'AzureBlob') { "Azure" } elseif($CloudStorageType -ieq 'AWSS3DynamoDB') { "AWS" } else { "None" }
             AWSAuthenticationType = if($CloudStorageType -ieq 'AWSS3DynamoDB') { $ContentStoreAWSAuthenticationType } else { "None" }
@@ -375,32 +375,6 @@
             AzureServicePrincipalAuthorityHost = if($CloudStorageType -ieq 'AzureBlob') {$ContentStoreAzureBlobServicePrincipalAuthorityHost } else { $null }
             AzureUserAssignedIdentityClientId = if($CloudStorageType -ieq 'AzureBlob') { $ContentStoreAzureBlobUserAssignedIdentityId } else { $null }
             DependsOn = $Depends
-        }
-        $Depends += "[ArcGIS_Portal]Portal$($Node.NodeName)"
-        
-        $ImportCertChainValue = $true  # default to true
-        $ForceImportCertificate = $false
-        if ([version]$Version -ge [version]"11.3") {
-            if ($Node.SSLCertificate -and $Node.SSLCertificate.ImportCertificateChain -ne $null) {
-                $ImportCertChainValue = $Node.SSLCertificate.ImportCertificateChain
-            }
-            if ($Node.SSLCertificate -and $Node.SSLCertificate.ForceImport -ne $null) {
-                $ForceImportCertificate = $Node.SSLCertificate.ForceImport
-            }
-        }
-
-        ArcGIS_Portal_TLS ArcGIS_Portal_TLS
-        {
-            PortalHostName          = $Node.NodeName
-            SiteAdministrator       = $PortalAdministratorCredential
-            WebServerCertificateAlias =  if($Node.SSLCertificate){$Node.SSLCertificate.CName}else{$null}
-            CertificateFileLocation = if($Node.SSLCertificate){$Node.SSLCertificate.Path}else{$null}
-            CertificatePassword = if($Node.SSLCertificate){$Node.SSLCertificate.Password}else{$null}
-            SslRootOrIntermediate = if($Node.SslRootOrIntermediate){$Node.SslRootOrIntermediate}else{$null}
-            EnableHSTS = $EnableHSTS
-            ImportCertificateChain = $ImportCertChainValue
-            ForceImportCertificate = $ForceImportCertificate
-            DependsOn               = $Depends
         }
     }   
 }

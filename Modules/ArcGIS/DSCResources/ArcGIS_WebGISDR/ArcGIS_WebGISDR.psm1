@@ -33,7 +33,7 @@ function Get-TargetResource
         $TimeoutInMinutes = 3600 # 10 hours
     )
 
-    $null 
+    @{}
 }
 function Set-TargetResource
 {
@@ -83,33 +83,11 @@ function Set-TargetResource
         throw "Invalid Action"
     }
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $WebGISToolPath
-    $psi.Arguments = $Arguments
-    $psi.UseShellExecute = $false #start the process from it's own executable file    
-    $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-    $psi.RedirectStandardError = $true #enable the process to read from standard error 
-    $psi.EnvironmentVariables["AGSPORTAL"] = [environment]::GetEnvironmentVariable("AGSPortal","Machine")
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $TimeoutInMilliseconds = $TimeoutInMinutes * 60 * 1000
-    $p.WaitForExit($TimeoutInMilliseconds)
-    if(-not $p.HasExited) {
-        $p.Kill()
-        throw "WebGIS DR $($Action) timed out after $($TimeoutInMinutes) minutes."
-    }
-
-    $op = $p.StandardOutput.ReadToEnd()
-    if($op -and $op.Length -gt 0) {
-        Write-Verbose "Output:- $op"
-    }
-    $err = $p.StandardError.ReadToEnd()
-    if($err -and $err.Length -gt 0) {
-        Write-Verbose $err
-    }
-    if($p.ExitCode -eq 0) {                    
-        Write-Verbose "WebGIS DR $($Action) finished successfully."
-    }else {
-        throw "WebGIS DR $($Action) failed. Process exit code:- $($p.ExitCode). Error - $(err)"
+    try{
+        Invoke-StartProcess -ExecPath $WebGISToolPath -Arguments $Arguments -EnvVariables @{"AGSPORTAL" = $null } -TimeOutInMinutes $TimeOutInMinutes -Verbose
+        Write-Verbose "WebGIS DR $($Action) run successful."
+    }catch{
+        throw "WebGIS DR $($Action) failed. Error - $($_)"
     }
 }
 

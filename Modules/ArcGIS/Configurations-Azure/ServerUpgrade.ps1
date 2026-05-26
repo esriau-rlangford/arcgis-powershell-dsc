@@ -2,7 +2,7 @@
     param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0",
+        $Version = "12.1",
 
         [Parameter(Mandatory=$True)]
         [System.String]
@@ -56,15 +56,14 @@
     Import-DscResource -ModuleName PSDesiredStateConfiguration 
     Import-DSCResource -ModuleName ArcGIS
     Import-DscResource -Name ArcGIS_Install 
-    Import-DscResource -Name ArcGIS_License 
-    Import-DscResource -Name ArcGIS_WindowsService 
+    Import-DscResource -Name ArcGIS_License
     Import-DscResource -Name ArcGIS_ServerUpgrade 
-    Import-DscResource -Name ArcGIS_NotebookServerUpgrade 
-    Import-DscResource -Name ArcGIS_MissionServerUpgrade
     Import-DscResource -Name ArcGIS_xFirewall 
     Import-DscResource -Name ArcGIS_WebAdaptor
-    Import-DscResource -Name ArcGIS_AzureSetupDownloadsFolderManager
+    Import-DscResource -Name ArcGIS_AzureSetupsManager
     Import-DscResource -Name ArcGIS_HostNameSettings
+    Import-DscResource -Name ArcGIS_RemoteFile
+    Import-DscResource -Name ArcGIS_WindowsService
     
     $ServiceCredentialUserName = $ServiceCredential.UserName
     $UpgradeSetupsStagingPath = "C:\ArcGIS\Deployment\Downloads\$($Version)"
@@ -77,12 +76,12 @@
             RebootNodeIfNeeded = $false
         }
 
-		ArcGIS_AzureSetupDownloadsFolderManager CleanupDownloadsFolder{
+		ArcGIS_AzureSetupsManager CleanupDownloadsFolder{
             Version = $Version
             OperationType = 'CleanupDownloadsFolder'
             ComponentNames = "All"
         }
-        $Depends = @("[ArcGIS_AzureSetupDownloadsFolderManager]CleanupDownloadsFolder")
+        $Depends = @("[ArcGIS_AzureSetupsManager]CleanupDownloadsFolder")
         
         if(-Not($ServiceCredentialIsDomainAccount)){
             User ArcGIS_RunAsAccount
@@ -95,7 +94,7 @@
             $Depends += '[User]ArcGIS_RunAsAccount'
         }
 
-        if($ServerRole -ieq "NotebookServer" -and (@("10.9","10.9.1","11.0","11.1","11.2","11.3") -icontains $OldVersion)){
+        if($ServerRole -ieq "NotebookServer" -and (@("10.9.1","11.0","11.1","11.2","11.3") -icontains $OldVersion)){
             ArcGIS_Install NotebookUninstallSamplesData{
                 Name = "NotebookServerSamplesData"
                 Version = $OldVersion
@@ -105,7 +104,7 @@
             $Depends += '[ArcGIS_Install]NotebookUninstallSamplesData'
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager DownloadServerUpgradeSetup{
+        ArcGIS_AzureSetupsManager DownloadServerUpgradeSetup{
             Version = $Version
             OperationType = 'DownloadUpgradeSetups'
             ComponentNames = "Server"
@@ -114,7 +113,7 @@
             UpgradeSetupsSourceFileShareCredentials = $FileshareMachineCredential
             DependsOn = $Depends
         }
-        $Depends += '[ArcGIS_AzureSetupDownloadsFolderManager]DownloadServerUpgradeSetup'
+        $Depends += '[ArcGIS_AzureSetupsManager]DownloadServerUpgradeSetup'
 
         $InstallerFileName = "ArcGISforServer.exe"
         if($ServerRole -ieq "NotebookServer"){
@@ -130,7 +129,7 @@
         }
 
         if(Get-Service 'ArcGISGeoEvent' -ErrorAction Ignore){
-            Service ArcGIS_GeoEvent_Service_Stop
+            ArcGIS_WindowsService ArcGIS_GeoEvent_Service_Stop
             {
                 Name = 'ArcGISGeoEvent'
                 Credential = $ServiceCredential
@@ -138,11 +137,11 @@
                 State = 'Stopped'
                 DependsOn = $Depends
             }
-            $Depends += "[Service]ArcGIS_GeoEvent_Service_Stop"
+            $Depends += "[ArcGIS_WindowsService]ArcGIS_GeoEvent_Service_Stop"
 
             if(Get-Service 'ArcGISGeoEventGateway' -ErrorAction Ignore) 
             {
-                Service ArcGIS_GeoEventGateway_Service
+                ArcGIS_WindowsService ArcGIS_GeoEventGateway_Service
                 {
                     Name		= 'ArcGISGeoEventGateway'
                     Credential  = $ServiceCredential
@@ -150,12 +149,12 @@
                     State = 'Stopped'
                     DependsOn   = $Depends
                 }
-                $Depends += "[Service]ArcGIS_GeoEventGateway_Service"
+                $Depends += "[ArcGIS_WindowsService]ArcGIS_GeoEventGateway_Service"
             }
         }
 
         if(Get-Service 'WorkflowManager' -ErrorAction Ignore){
-            Service ArcGIS_WorkflowManager_Service_Stop
+            ArcGIS_WindowsService ArcGIS_WorkflowManager_Service_Stop
             {
                 Name = 'WorkflowManager'
                 Credential = $ServiceCredential
@@ -163,7 +162,7 @@
                 State = 'Stopped'
                 DependsOn = $Depends
             }
-            $Depends += "[Service]ArcGIS_WorkflowManager_Service_Stop"
+            $Depends += "[ArcGIS_WindowsService]ArcGIS_WorkflowManager_Service_Stop"
         }
       
         ArcGIS_Install ServerUpgrade{
@@ -193,7 +192,7 @@
                 }
 			}
 			TestScript = { -not(Test-Path $using:InstallerPathOnMachine) -and -not(Test-Path $using:InstallerVolumePathOnMachine) }
-			GetScript = { $null }          
+			GetScript = { @{} }          
 		}
         $Depends += '[Script]RemoveServerInstaller'
 
@@ -218,19 +217,28 @@
         }
         
 		## Download license file
-		if($ServerLicenseFileName) {
-            $ServerLicenseFileUrl = "$($DeploymentArtifactCredentials.UserName)/$($ServerLicenseFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $ServerLicenseFileName -Uri $ServerLicenseFileUrl -UseBasicParsing -ErrorAction Ignore
+
+        if($ServerLicenseFileName) {
+            ArcGIS_RemoteFile "ServerLicenseFileDownload"
+            {
+                Source = $ServerLicenseFileName
+                Destination = (Join-Path $(Get-Location).Path $ServerLicenseFileName)
+                FileSourceType = "AzureSASUri"
+                Credential = $DeploymentArtifactCredentials
+                Ensure = 'Present'
+            }
+            $Depends += '[ArcGIS_RemoteFile]ServerLicenseFileDownload'
         }
 
 		ArcGIS_License ServerLicense
         {
             LicenseFilePath = (Join-Path $(Get-Location).Path $ServerLicenseFileName)
-            Ensure = 'Present'
-            Component = "Server"
-            ServerRole = $ServerLicenseRole
-            Force = $True
-            DependsOn = $Depends
+            Ensure          = 'Present'
+            Component       = "Server"
+            ServerRole      = $ServerLicenseRole
+            Version 	    = $Version
+            Force           = $True
+            DependsOn       = $Depends
         }
 
         $Depends += '[ArcGIS_License]ServerLicense'
@@ -243,15 +251,17 @@
         }
         $Depends += '[ArcGIS_HostNameSettings]ServerHostNameSettings'
         
+        ArcGIS_ServerUpgrade "$($ServerRole)ConfigureUpgrade"{
+            Version = $Version
+            ServerType = if($ServerRole -ieq "NotebookServer"){ "NotebookServer" }elseif($ServerRole -ieq "MissionServer"){ "MissionServer" }else{ "Server" }
+            ServerHostName = $env:ComputerName
+            EnableUpgradeSiteDebug = $DebugMode
+            DependsOn = $Depends
+        }
+        $Depends += "[ArcGIS_ServerUpgrade]$($ServerRole)ConfigureUpgrade"
+
         if($ServerRole -ieq "NotebookServer"){
             #For Notebook Server at the end of install use the Configure app to finish the upgrade process.
-            ArcGIS_NotebookServerUpgrade NotebookServerConfigureUpgrade{
-                Version = $Version
-                ServerHostName = $env:ComputerName
-                DependsOn = $Depends
-            }
-            $Depends += '[ArcGIS_NotebookServerUpgrade]NotebookServerConfigureUpgrade'
-
             if($IsNotebookServerWebAdaptorUpgrade){
                 ArcGIS_Install "WebAdaptorIISUninstall"
                 { 
@@ -302,7 +312,7 @@
                     SiteName            = $NotebookWebAdaptorContext
                     ContainerImagePaths = @($NotebookContainerPathOnMachine) # Add the path to the container images
                     ExtractSamples      = $false
-                    DependsOn           = @('[ArcGIS_NotebookServerUpgrade]NotebookServerConfigureUpgrade')
+                    DependsOn           = @("[ArcGIS_ServerUpgrade]$($ServerRole)ConfigureUpgrade")
                     PsDscRunAsCredential  = $ServiceCredential # Copy as arcgis account which has access to this share
                 }
 
@@ -313,31 +323,14 @@
                         Remove-Item $using:NotebookContainerPathOnMachine -Force
                     }
                     TestScript = { -not(Test-Path $using:NotebookContainerPathOnMachine) }
-                    GetScript = { $null }
+                    GetScript = { @{} }
                     DependsOn = @('[ArcGIS_NotebookPostInstall]NotebookPostInstall','[ArcGIS_WebAdaptor]ConfigureWebAdaptor')
                 }
-            }
-            
-        }elseif($ServerRole -ieq "MissionServer"){
-            ArcGIS_MissionServerUpgrade MissionServerConfigureUpgrade{
-                Version = $Version
-                ServerHostName = $env:ComputerName
-                DependsOn = $Depends
-            }
-        }else{
-            ArcGIS_ServerUpgrade ServerConfigureUpgrade{
-                Version = $Version
-                ServerHostName = $env:ComputerName
-                EnableUpgradeSiteDebug = $DebugMode
-                DependsOn = $Depends
-            }
+            }   
         }
 
         #Upgrade GeoEvents
         if($ServerRole -ieq "GeoEventServer"){
-            
-            $Depends += '[ArcGIS_ServerUpgrade]ServerConfigureUpgrade'
-
             Script ArcGIS_GeoEvent_Service_Stop_for_Upgrade
             {
                 TestScript  = {  return $false }
@@ -345,8 +338,7 @@
                     @('ArcGISGeoEvent', 'ArcGISGeoEventGateway') | ForEach-Object{
                         $ServiceName = $_
                         Write-Verbose "Stopping the service '$ServiceName'"    
-                        Stop-Service -Name $ServiceName -ErrorAction Ignore    
-                        Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped'
+                        Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped' -Verbose
                     }
                 }
                 GetScript   = { return @{} }                  
@@ -418,12 +410,11 @@
                     Remove-Item $using:WorkflowManagerServerInstallerPathOnMachine -Force
                 }
                 TestScript = { -not(Test-Path $using:WorkflowManagerServerInstallerPathOnMachine) }
-                GetScript = { $null }          
+                GetScript = { @{} }          
             }
             $Depends += '[Script]RemoveWorkflowManagerServerInstaller'
             
-            $VersionArray = $Version.Split(".")
-            if($IsMultiMachineServerSite -and (($VersionArray[0] -gt 11) -or ($VersionArray[0] -ieq 11 -and $VersionArray -ge 3))){ # 11.3 or later
+            if($IsMultiMachineServerSite -and ([version]$Version -ge "11.3")){ # 11.3 or later
                 $WfmPorts = @("13820", "13830", "13840", "9880", "11211")
 
                 ArcGIS_xFirewall WorkflowManagerServer_FirewallRules_MultiMachine_OutBound

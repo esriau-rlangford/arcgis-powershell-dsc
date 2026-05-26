@@ -4,8 +4,8 @@ class ArcGIS_ServerSettings : OMI_BaseResource
 {
 	[Key] String ServerHostName;
 	[Write, EmbeddedInstance("MSFT_Credential")] String SiteAdministrator;
-	[Write] String ExternalDNSName;
-	[Write] String ServerContext;
+	[Key, ValueMap{"Server","NotebookServer","MissionServer","VideoServer","DataPipelinesServer"}, Values{"Server","NotebookServer","MissionServer","VideoServer","DataPipelinesServer"}] String ServerType;
+	[Write] String WebContextURL;	
 	[Write, Description("Is Service Directory Disabled")] Boolean DisableServiceDirectory;
 	[Write] String SharedKey;
 	[Write] String HttpProxyHost;
@@ -15,5 +15,8 @@ class ArcGIS_ServerSettings : OMI_BaseResource
 	[Write] UInt32 HttpsProxyPort;
 	[Write, EmbeddedInstance("MSFT_Credential")] String HttpsProxyCredential;
 	[Write] String NonProxyHosts;
+	[Write] String WebSocketContextURL;
+	[Write] Boolean DisableDockerHealthCheck;
+	[Write] String VideoServerLiveStreamGatewayHostname;
+	[Write] String VideoServerLiveStreamPorts;
 };
-

@@ -44,7 +44,7 @@ function Get-TargetResource
 		$ProductId
 	)
 	
-	$null
+	@{}
 }
 
 

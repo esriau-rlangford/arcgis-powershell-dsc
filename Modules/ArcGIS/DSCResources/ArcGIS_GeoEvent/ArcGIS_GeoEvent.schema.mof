@@ -7,7 +7,6 @@ class ArcGIS_GeoEvent : OMI_BaseResource
 	[Key] String Name;
 	[Write, EmbeddedInstance("MSFT_Credential")] String SiteAdministrator;	
 	[Write] String WebSocketContextUrl;
-    [Write] String SiteAdminUrl;	
-	[Write, ValueMap{"Present","Absent"}, Values{"Present","Absent"}] String Ensure;
+    [Write, ValueMap{"Present","Absent"}, Values{"Present","Absent"}] String Ensure;
 };
 

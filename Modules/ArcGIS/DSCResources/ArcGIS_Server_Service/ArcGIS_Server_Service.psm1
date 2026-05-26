@@ -5,6 +5,14 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
+
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Portal.psm1'))
+
 function Get-TargetResource
 {
 	[CmdletBinding()]
@@ -20,7 +28,7 @@ function Get-TargetResource
 		$PathToSourceFile
 	)
     
-	$null
+	@{}
 }
 
 function Test-TargetResource
@@ -104,18 +112,17 @@ function Test-TargetResource
 
     $result = $false
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
-    $Referer = 'http://localhost'
+    $Referer = 'https://localhost'
 
-    $Scheme = if($Port -eq 6080 -or $Port -eq 80) { 'http' } else { 'https' }
-    $ServerEndPoint = "$($Scheme)://$($ServerHostname):$Port"
-    $Url = "$ServerEndPoint/$ServerContext/admin"
-    Wait-ForUrl -Url $Url -MaxWaitTimeInSeconds 180
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $ServerHostname -Context $ServerContext -Port $Port
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseURL -MaxWaitTimeInSeconds 180
    
     $token = ""
 	if($PortalHostName -and $PortalPort -and $PortalContext){
-		$token = Get-PortalToken -PortalHostName $PortalHostName -SiteName $PortalContext -Credential $PublisherAccount -Referer $Referer -Port $PortalPort
+        $PortalBaseURL = "https://$(PortalHostName):$($PortalPort)/$($PortalContext)"
+		$token = Get-PortalToken -URL $PortalBaseURL -Credential $PublisherAccount -Referer $Referer
 	}else{
-		$token = Get-ServerToken -ServerEndPoint $ServerEndPoint -ServerSiteName $ServerContext -Credential $PublisherAccount -Referer $Referer
+		$token = Get-ServerToken -URL $ServerBaseUrl -Credential $PublisherAccount -Referer $Referer
 	}
     
     Write-Verbose "Check for existence of ServiceName:- $ServiceName ServiceType:- $ServiceType Folder:- $Folder"
@@ -144,7 +151,7 @@ function Test-TargetResource
     }
 
     if($result -and $State){        
-        $statusUrl = "$($ServerEndPoint)/$ServerContext/admin/services/$($ServiceNameToCompare).$($ServiceType)/status"
+        $statusUrl = "$($ServerBaseUrl)/admin/services/$($ServiceNameToCompare).$($ServiceType)/status"
         Write-Verbose "Checking current state of service"
         $resp = Invoke-ArcGISWebRequest -Url $statusUrl -HttpFormParameters @{ f='json'; token = $token.token} -Referer $Referer    
         if($State -ine $resp.realTimeState) {
@@ -159,7 +166,7 @@ function Test-TargetResource
         if(-not(Test-Path $PathToItemInfoFile)){
             Write-Verbose "File $PathToItemInfoFile not found or inaccessible"
         }        
-        $itemInfoUrl = "$($ServerEndPoint)/$ServerContext/admin/services/$($ServiceNameToCompare).$($ServiceType)/iteminfo"
+        $itemInfoUrl = "$($ServerBaseUrl)/admin/services/$($ServiceNameToCompare).$($ServiceType)/iteminfo"
         Write-Verbose "Checking iteminfo on the service at $itemInfoUrl"
         $resp = Invoke-ArcGISWebRequest -Url $itemInfoUrl -HttpFormParameters @{ f='json'; token = $token.token} -Referer $Referer    
         if($resp.description -and ($resp.description.Length -gt 0)) {
@@ -256,22 +263,22 @@ function Set-TargetResource
         $ServiceType = if($Splits.Length -gt 1) { $Splits[$Splits.Length - 1] } else { 'MapServer' }
     }
         
-    $Referer = 'http://localhost'
+    $Referer = 'https://localhost'
 
-	$Scheme = if($Port -eq 6080 -or $Port -eq 80) { 'http' } else { 'https' }
-    $ServerEndPoint = "$($Scheme)://$($ServerHostname):$Port"
-	Write-Verbose $ServerEndPoint
+	$ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $ServerHostname -Context $ServerContext -Port $Port
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseURL -MaxWaitTimeInSeconds 180
 	
 	$token = ""
 	if($PortalHostName -and $PortalPort -and $PortalContext){
-		$token = Get-PortalToken -PortalHostName $PortalHostName -SiteName $PortalContext -Credential $PublisherAccount -Referer $Referer -Port $PortalPort
+        $PortalBaseURL = "https://$(PortalHostName):$($PortalPort)/$($PortalContext)"
+		$token = Get-PortalToken -URL $PortalBaseURL -Credential $PublisherAccount -Referer $Referer
 	}else{
-		$token = Get-ServerToken -ServerEndPoint $ServerEndPoint -ServerSiteName $ServerContext -Credential $PublisherAccount -Referer $Referer
+        $token = Get-ServerToken -URL $ServerBaseURL -Credential $PublisherAccount -Referer $Referer
 	}
     
 	Write-Verbose "Check for existence of ServiceName:- $ServiceName ServiceType:- $ServiceType Folder:- $Folder"
     $ServiceNameToCompare = if($Folder) { "$Folder/$ServiceName" } else { $ServiceName }
-    $CatalogEndpoint = "$($ServerEndPoint)/$ServerContext/rest/services/$($Folder)"   
+    $CatalogEndpoint = "$($ServerBaseURL)/rest/services/$($Folder)"   
     $resp = Invoke-ArcGISWebRequest -Url $CatalogEndpoint -HttpFormParameters @{ f='json'; token = $token.token} -Referer $Referer    
     Write-Verbose "[DEBUG] Services:- $(ConvertTo-Json $resp.services -Compress -Depth 5)"
     $ServiceExists = ($resp.services | Where-Object { $_.name -eq $ServiceNameToCompare -and $_.type -eq $ServiceType } | Measure-Object).Count -gt 0
@@ -289,8 +296,8 @@ function Set-TargetResource
                     Write-Verbose 'Updating Service Properties'
                     Update-ServiceProperties -ServerHostName $ServerHostName -ServerContext $ServerContext -Token $token.token -Referer $Referer -Port $Port -ServiceProperties (Get-Content $PathToSourceFile -Raw) -ServiceName $ServiceNameToCompare -ServiceType $ServiceType -Verbose
                     # Wait until Service update completes.
-                    Write-Verbose "Waiting for Url '$ServerUrl/$SiteName/admin' to respond"
-                    Wait-ForUrl -Url "$ServerUrl/$SiteName/admin/" -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 90 
+                    Write-Verbose "Waiting for Url 'ServerBaseUrl' to respond"
+                    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server" -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 90 
                 }
             }         
         }else {    
@@ -306,7 +313,7 @@ function Set-TargetResource
                 Write-Verbose "Publishing service '$ServiceName' of type '$ServiceType' to '$ServicePath'"
                 Publish-ArcGISService -ServerHostName $ServerHostName -ServerContext $ServerContext -Token $token.token -Referer $Referer -SDFilePath $PathToSourceFile -ServicePath $ServicePath -Port $Port -Verbose
             }else {
-                $CreateServiceUrl = if($Folder) { "$($ServerEndPoint)/$ServerContext/admin/services/$Folder/createService" } else { "$($ServerEndPoint)/$ServerContext/admin/services/createService" }
+                $CreateServiceUrl = if($Folder) { "$($ServerBaseURL)/admin/services/$Folder/createService" } else { "$($ServerBaseURL)/admin/services/createService" }
                 $service = (Get-Content $PathToSourceFile -Raw)
                 Write-Verbose "Creating service '$ServiceName' of type '$ServiceType' using URL:- '$CreateServiceUrl'"
                 $resp = Invoke-ArcGISWebRequest -Url $CreateServiceUrl -HttpFormParameters @{ f='json'; service = $service; token = $token.token } -Referer $Referer -HttpMethod 'POST' -Verbose -TimeOutSec 240
@@ -318,7 +325,7 @@ function Set-TargetResource
             if(-not(Test-Path $PathToItemInfoFile)){
                 Write-Verbose "File $PathToItemInfoFile not found or inaccessible"
             }
-            $itemInfoUrl = "$($ServerEndPoint)/$ServerContext/admin/services/$($ServiceNameToCompare).$($ServiceType)/iteminfo"
+            $itemInfoUrl = "$($ServerBaseURL)/admin/services/$($ServiceNameToCompare).$($ServiceType)/iteminfo"
             Write-Verbose "Checking iteminfo on the service at $itemInfoUrl"
             $resp = Invoke-ArcGISWebRequest -Url $itemInfoUrl -HttpFormParameters @{ f='json'; token = $token.token} -Referer $Referer    
             if($resp.description -and ($resp.description.Length -gt 0)) {
@@ -332,7 +339,7 @@ function Set-TargetResource
             }
         }
         
-        $statusUrl = "$($ServerEndPoint)/$ServerContext/admin/services/$($ServiceNameToCompare).$($ServiceType)/status"
+        $statusUrl = "$($ServerBaseURL)/admin/services/$($ServiceNameToCompare).$($ServiceType)/status"
         Write-Verbose "Retrieve service status from $statusUrl"
         $resp = Invoke-ArcGISWebRequest -Url $statusUrl -HttpFormParameters @{ f='json'; token = $token.token} -Referer $Referer   
         if($resp) {
@@ -343,12 +350,12 @@ function Set-TargetResource
         if($State -ine $resp.realTimeState) {
             Write-Verbose "The realTimeState of the service '$($resp.realTimeState)' does not match expected value of $($State)"
             if($State -ieq 'STOPPED') {
-                $stopUrl = "$($ServerEndPoint)/$ServerContext/admin/services/$($ServiceNameToCompare).$($ServiceType)/stop"
+                $stopUrl = "$($ServerBaseURL)/admin/services/$($ServiceNameToCompare).$($ServiceType)/stop"
                 Write-Verbose "Stopping service with operation $stopUrl"
                 Invoke-ArcGISWebRequest -Url $stopUrl -HttpFormParameters @{ f='json'; token = $token.token} -Referer $Referer -TimeOutSec 120   
             }
             elseif($State -ieq 'STARTED') {
-                $startUrl = "$($ServerEndPoint)/$ServerContext/admin/services/$($ServiceNameToCompare).$($ServiceType)/start"
+                $startUrl = "$($ServerBaseURL)/admin/services/$($ServiceNameToCompare).$($ServiceType)/start"
                 Write-Verbose "Starting service with operation $startUrl" 
                 try {
                     Invoke-ArcGISWebRequest -Url $startUrl -HttpFormParameters @{ f='json'; token = $token.token} -Referer $Referer -TimeOutSec 600 
@@ -363,7 +370,7 @@ function Set-TargetResource
         {
             Write-Verbose "Service with name '$ServiceName' of type '$ServiceType' does not exist in folder '$($Folder)'"            
         }else {
-            $DeleteServiceUrl = if($Folder) { "$($ServerEndPoint)/$ServerContext/admin/services/$Folder/$($ServiceName).$($ServiceType)/delete" } else { "$($ServerEndPoint)/$ServerContext/admin/services/$($ServiceName).$($ServiceType)/delete" }
+            $DeleteServiceUrl = if($Folder) { "$($ServerBaseURL)/admin/services/$Folder/$($ServiceName).$($ServiceType)/delete" } else { "$($ServerBaseURL)/admin/services/$($ServiceName).$($ServiceType)/delete" }
             Write-Verbose "Deleting service '$ServiceName' of type '$ServiceType' in folder '$Folder' using URL:- '$DeleteServiceUrl'"
             Invoke-ArcGISWebRequest -Url $DeleteServiceUrl -HttpFormParameters @{ f='json'; service = $service; token = $token.token } -Referer $Referer -HttpMethod 'POST' -Verbose
         }
@@ -388,7 +395,7 @@ function Get-ArcGISPublishJobStatus
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [System.String]
         [Parameter(Mandatory=$true)]
@@ -421,7 +428,7 @@ function Wait-ArcGISServicePublishJob
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [System.String]
         [Parameter(Mandatory=$false)]
@@ -482,7 +489,7 @@ function Test-ArcGISServerFolder
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
         
         [parameter(Mandatory = $false)]
 		[uint32]
@@ -521,7 +528,7 @@ function Invoke-CreateArcGISServerFolder
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
         
         [parameter(Mandatory = $false)]
 		[uint32]
@@ -555,7 +562,7 @@ function Publish-ArcGISService
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [System.String]
         [Parameter(Mandatory=$true)]
@@ -658,7 +665,7 @@ function Invoke-DeleteArcGISUploadedItem
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [System.String]
         [Parameter(Mandatory=$true)]
@@ -690,7 +697,7 @@ function Get-ArcGISUploads
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
         
         [parameter(Mandatory = $false)]
 		[uint32]
@@ -718,7 +725,7 @@ function Get-ServiceConfiguration
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [System.String]
         [Parameter(Mandatory=$true)]
@@ -753,7 +760,7 @@ function Submit-ArcGISPublishJob
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [System.String]
         [Parameter(Mandatory=$true)]
@@ -789,7 +796,7 @@ function Get-ServiceProperties
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [parameter(Mandatory = $false)]
 		[uint32]
@@ -837,7 +844,7 @@ function Update-ServiceProperties
 
         [System.String]
         [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
+        $Referer = 'https://localhost',
 
         [parameter(Mandatory = $false)]
 		[uint32]

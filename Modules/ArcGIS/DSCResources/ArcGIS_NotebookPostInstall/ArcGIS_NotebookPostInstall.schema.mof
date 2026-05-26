@@ -6,4 +6,5 @@ class ArcGIS_NotebookPostInstall : OMI_BaseResource
 	[Key] String SiteName;
 	[Write] String ContainerImagePaths[];
 	[Write] Boolean ExtractSamples;
+	[Write] Boolean ForceRestart;
 };

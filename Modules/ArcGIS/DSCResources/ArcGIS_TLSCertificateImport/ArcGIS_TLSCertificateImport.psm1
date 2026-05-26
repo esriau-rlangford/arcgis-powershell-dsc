@@ -5,6 +5,10 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
+
 <#
     .SYNOPSIS
         Imports a SSL certificate from remote machine to local machines root store.
@@ -65,7 +69,7 @@ function Get-TargetResource
         $ServerType
     )
 
-	$null
+	@{}
 }
 
 
@@ -225,24 +229,9 @@ function Test-CertificateInTrustedCertificateStore
     finally 
     {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-		[System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls
+		[System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
     }   
 	$global:certCheck
-}
-
-function Get-AllSSLCertificateCNamesForMachine 
-{
-    [CmdletBinding()]
-    param(
-        [string]$ServerHostName = 'localhost', 
-        [string]$SiteName = 'arcgis', 
-        [string]$Token, 
-        [string]$Referer, 
-        [string]$MachineName,
-        [string]$ServerType
-    )
-    $SitePort = if($ServerType -ieq "NotebookServer"){ 11443 }elseif($ServerType -ieq "MissionServer"){ 20443 }elseif($ServerType -ieq "VideoServer"){ 21443 }else{ 6443 }
-    Invoke-ArcGISWebRequest -Url "https://$($ServerHostName):$($SitePort)/$SiteName/admin/machines/$MachineName/sslCertificates/" -HttpFormParameters @{ f= 'json'; token = $Token; } -Referer $Referer -HttpMethod 'GET' 
 }
 
 function Import-CertFromServerIntoTrustedCertificateStore
@@ -276,14 +265,9 @@ function Import-CertFromServerIntoTrustedCertificateStore
         # Import Certificate into ArcGIS Server (establish trust between JVM)
         if($SiteAdministrator) {
             $FQDN = Get-FQDN $env:COMPUTERNAME
-            $SitePort = if($ServerType -ieq "NotebookServer"){ 11443 }elseif($ServerType -ieq "MissionServer"){ 20443 }elseif($ServerType -ieq "VideoServer"){ 21443 }else{ 6443 }
-            $ServerUrl = "https://$($FQDN):$($SitePort)"
-            $SiteName = 'arcgis'
-       
-            #Wait-ForUrl -Url "$($ServerUrl)/$SiteName/admin/" -MaxWaitTimeInSeconds 60 -HttpMethod 'GET'
-            $Referer = $ServerUrl
-
-            $token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer
+            $ServerBaseURL = Get-ArcGISComponentBaseUrl -FQDN $FQDN -ComponentName $ServerType            
+            $Referer = $ServerBaseURL
+            $token = Get-ServerToken -URL $ServerBaseURL -Credential $SiteAdministrator -Referer $Referer
             
             $CertOnDiskPath = Join-Path $env:TEMP "$($cert.Thumbprint).cer"
             Set-Content -Path $CertOnDiskPath -Value ($cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)) -Encoding Byte -Force
@@ -306,17 +290,12 @@ function Import-CertFromServerIntoTrustedCertificateStore
 
             Write-Verbose "Thumbprint of certificate is $($cert.Thumbprint). Issue is $($Issuer). Alias being used is $($Alias)."
             if($Alias) {
-                $certNames = Get-AllSSLCertificateCNamesForMachine -ServerHostName $FQDN -SiteName $SiteName -Token $token.token -Referer $Referer -MachineName $FQDN -ServerType $ServerType
+                $certNames = Get-AllSSLCertificateForMachine -URL $ServerBaseURL -Token $token.token -Referer $Referer -MachineName $FQDN
                 if($certNames.certificates -icontains $Alias) {
                     Write-Verbose "Certificate with alias $Alias already exists for Machine $FQDN"
                 }else{
                     Write-Verbose "Certificate with alias $Alias not found for Machine $FQDN"
-                    $ImportCACertUrl  = $ServerURL.TrimEnd("/") + "/$SiteName/admin/machines/$FQDN/sslCertificates/importRootOrIntermediate"
-                    $props = @{ f= 'json'; token = $token.token; alias = $Alias  }    
-                    Write-Verbose "Import Certificate URL:- $ImportCACertUrl"
-                    Invoke-UploadFile -url $ImportCACertUrl -filePath $CertOnDiskPath `
-                                -fileContentType 'application/pkix-cert' -fileParameterName 'rootCACertificate' `
-                                -fileName "$($cert.Thumbprint).cer" -Referer $Referer -formParams $props
+                    Import-RootOrIntermediateCertificate -URL $ServerBaseURL -Token $token.token -Referer $Referer -MachineName $FQDN -CertAlias $Alias -CertificateFilePath $CertOnDiskPath -CertificateFileName "$($cert.Thumbprint).cer"
                 }
                 
             }else {
@@ -360,7 +339,7 @@ function Import-CertFromServerIntoTrustedCertificateStore
     finally 
     {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-		[System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls
+		[System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
     }
 }
 

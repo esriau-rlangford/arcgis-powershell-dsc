@@ -3,7 +3,7 @@
 	param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0"
+        $Version = "12.1"
 
         ,[Parameter(Mandatory=$false)]
         [System.Boolean]
@@ -138,14 +138,15 @@
 	Import-DscResource -Name ArcGIS_Portal
     Import-DscResource -Name ArcGIS_Portal_TLS
     Import-DscResource -Name ArcGIS_Service_Account
-    Import-DscResource -name ArcGIS_WindowsService
     Import-DscResource -Name ArcGIS_xFirewall
     Import-DscResource -Name ArcGIS_Disk
     Import-DscResource -Name ArcGIS_PortalSettings
     Import-DscResource -Name ArcGIS_Federation
-    Import-DscResource -Name ArcGIS_AzureSetupDownloadsFolderManager
+    Import-DscResource -Name ArcGIS_AzureSetupsManager
     Import-DscResource -Name ArcGIS_HostNameSettings
-   
+    Import-DscResource -Name ArcGIS_RemoteFile
+    Import-DscResource -Name ArcGIS_WindowsService
+    
     $FileShareRootPath = $FileSharePath
     if(-not($UseExistingFileShare)) { 
         $FileSharePath = "\\$($FileShareMachineName)\$($FileShareName)"
@@ -162,31 +163,8 @@
     }
     
     $PortalCertificateLocalFilePath =  (Join-Path $LocalCertificatePath $PortalCertificateFileName)
-
     $FolderName = $ExternalDNSHostName.Substring(0, $ExternalDNSHostName.IndexOf('.')).ToLower()
-
     $HasValidServiceCredential = ($ServiceCredential -and ($ServiceCredential.GetNetworkCredential().Password -ine 'Placeholder'))
-
-    ##
-    ## Download license file and certificate files
-    ##
-    if($HasValidServiceCredential){
-        if($PortalLicenseFileName) {
-            $PortalLicenseFileUrl = "$($DeploymentArtifactCredentials.UserName)/$($PortalLicenseFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $PortalLicenseFileName -Uri $PortalLicenseFileUrl -UseBasicParsing -ErrorAction Ignore
-        }   
-        
-        if($PublicKeySSLCertificateFileName){
-            $PublicKeySSLCertificateFileUrl = "$($DeploymentArtifactCredentials.UserName)/$($PublicKeySSLCertificateFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $PublicKeySSLCertificateFileName -Uri $PublicKeySSLCertificateFileUrl -UseBasicParsing -ErrorAction Ignore
-        }
-
-        if($PortalCertificateFileName){
-            $PortalCertificateFileUrl = "$($DeploymentArtifactCredentials.UserName)/Certs/$($PortalCertificateFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $PortalCertificateLocalFilePath -Uri $PortalCertificateFileUrl -UseBasicParsing -ErrorAction Ignore
-        }
-    }
-
 	$ServerHostNames = ($ServerMachineNames -split ',')
     $ServerMachineName = $ServerHostNames | Select-Object -First 1
     $PortalHostNames = ($PortalMachineNames -split ',')
@@ -232,7 +210,7 @@
             HostName = $env:ComputerName
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager CleanupDownloadsFolder{
+        ArcGIS_AzureSetupsManager CleanupDownloadsFolder{
             Version = $Version
             OperationType = 'CleanupDownloadsFolder'
             ComponentNames = if($IsAllInOneBaseDeploy){ "DataStore,Server,Portal" }else{ "Portal" }
@@ -241,6 +219,42 @@
         if($HasValidServiceCredential) 
         {
             $PortalDependsOn = @()
+
+            if($PortalLicenseFileName) {
+                ArcGIS_RemoteFile "PortalLicenceFileDownload"
+                {
+                    Source = $PortalLicenseFileName
+                    Destination = (Join-Path $(Get-Location).Path $PortalLicenseFileName)
+                    FileSourceType = "AzureSASUri"
+                    Credential = $DeploymentArtifactCredentials
+                    Ensure = 'Present'
+                }
+                $PortalDependsOn += '[ArcGIS_RemoteFile]PortalLicenceFileDownload'
+            }
+
+            if($PublicKeySSLCertificateFileName) {
+                ArcGIS_RemoteFile "PublicKeySSLCertificateFileDownload"
+                {
+                    Source = $PublicKeySSLCertificateFileName
+                    Destination = (Join-Path $(Get-Location).Path $PublicKeySSLCertificateFileName)
+                    FileSourceType = "AzureSASUri"
+                    Credential = $DeploymentArtifactCredentials
+                    Ensure = 'Present'
+                }
+                $PortalDependsOn += '[ArcGIS_RemoteFile]PublicKeySSLCertificateFileDownload'
+            }
+
+            if($PortalCertificateFileName) {
+                ArcGIS_RemoteFile "PortalCertificateFileDownload"
+                {
+                    Source = "Certs/$($PortalCertificateFileName)"
+                    Destination = $PortalCertificateLocalFilePath
+                    FileSourceType = "AzureSASUri"
+                    Credential = $DeploymentArtifactCredentials
+                    Ensure = 'Present'
+                }
+                $PortalDependsOn += '[ArcGIS_RemoteFile]PortalCertificateFileDownload'
+            }
 
             if(-not($IsUpdatingCertificates))
             {
@@ -265,6 +279,7 @@
                             LicenseFilePath = (Join-Path $(Get-Location).Path $PortalLicenseFileName)
                             Ensure          = 'Present'
                             Component       = 'Portal'
+                            Version 		= $Version
                         } 
                         $PortalDependsOn += '[ArcGIS_License]PortalLicense'
                     }
@@ -395,8 +410,7 @@
                         }  
                         $PortalDependsOn += @('[ArcGIS_xFirewall]Portal_Database_InBound')
 
-                        $VersionArray = $Version.Split(".")
-                        if(($VersionArray[0] -gt 11) -or ($VersionArray[0] -ieq 11 -and $VersionArray[1] -ge 3)){ # 11.3 or later
+                        if([version]$Version -ge "11.3"){ # 11.3 or later
                             ArcGIS_xFirewall Portal_Ignite_OutBound
                             {
                                 Name                  = "PortalforArcGIS-Ignite-Outbound" 
@@ -465,6 +479,7 @@
             { 
                 ArcGIS_Portal_TLS ArcGIS_Portal_TLS
                 {
+                    Version                 = $Version
                     PortalHostName          = if($PortalHostName -ieq $env:ComputerName){ $PortalHostName }else{ $PeerMachineName }
                     SiteAdministrator       = $SiteAdministratorCredential 
                     WebServerCertificateAlias= "ApplicationGateway"
@@ -480,6 +495,7 @@
             {
                 ArcGIS_PortalSettings PortalSettings
                 {
+                    Version             = $Version
                     ExternalDNSName     = $ExternalDNSHostName
                     PortalContext       = $PortalContext
                     PortalHostName      = $PortalHostName

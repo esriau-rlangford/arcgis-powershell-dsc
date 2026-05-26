@@ -37,7 +37,7 @@ function Get-TargetResource
 		$ExternalDNSName
 	)
     
-    $null
+    @{}
 }
 
 function Set-TargetResource

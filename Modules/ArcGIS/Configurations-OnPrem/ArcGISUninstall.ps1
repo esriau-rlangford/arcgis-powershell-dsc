@@ -14,7 +14,7 @@
         $ServiceCredentialIsMSA = $false
     )
     Import-DscResource -ModuleName PSDesiredStateConfiguration 
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_Install,ArcGIS_FileShare, ArcGIS_Tomcat
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_Install,ArcGIS_FileShare, ArcGIS_Tomcat
     
     Node $AllNodes.NodeName
     {   
@@ -25,15 +25,6 @@
             }
         }
         
-        if(($Node.Role -icontains "Server" -or $Node.Role -icontains "Portal") -and $ConfigurationData.ConfigData.Insights){
-            ArcGIS_Install InsightsUninstall
-            {
-                Name = "Insights"
-                Version = $ConfigurationData.ConfigData.InsightsVersion
-                Ensure = "Absent"
-            }
-        }
-
         for ( $i = 0; $i -lt $Node.Role.Count; $i++ )
         {        
             $NodeRole = $Node.Role[$i]
@@ -41,7 +32,7 @@
             {
                 'Server' {
                     
-                    $ServerTypeName = if(@("MissionServer", "NotebookServer", "VideoServer") -iContains $ConfigurationData.ConfigData.ServerRole){ $ConfigurationData.ConfigData.ServerRole }else{ "Server" }
+                    $ServerTypeName = if(@("MissionServer", "NotebookServer", "VideoServer", "DataPipelinesServer") -iContains $ConfigurationData.ConfigData.ServerRole){ $ConfigurationData.ConfigData.ServerRole }else{ "Server" }
                     
                     if($ServerTypeName -ieq "Server"){
                         if($ConfigurationData.ConfigData.WorkflowManagerServer) 
@@ -63,6 +54,24 @@
                             }
                         }
 
+                        if($ConfigurationData.ConfigData.RealityServer) 
+                        { 
+                            ArcGIS_Install RealityServerUninstall{
+                                Name = "RealityServer"
+                                Version = $ConfigurationData.ConfigData.Version
+                                Ensure = "Absent"
+                            }
+                        }
+
+                        if($ConfigurationData.ConfigData.GeoEnrichmentServer) 
+                        { 
+                            ArcGIS_Install GeoEnrichmentServerUninstall{
+                                Name = "GeoEnrichmentServer"
+                                Version = $ConfigurationData.ConfigData.Version
+                                Ensure = "Absent"
+                            }
+                        }
+
                         if($ConfigurationData.ConfigData.Server.Extensions){
                             foreach ($Extension in $ConfigurationData.ConfigData.Server.Extensions.GetEnumerator())
                             {
@@ -76,8 +85,7 @@
                         }
                     }
                     
-                    $VersionArray = $ConfigurationData.ConfigData.Version.Split(".")
-                    if($ServerTypeName -ieq "NotebookServer" -and (@("10.9","10.9.1","11.0","11.1","11.2","11.3") -icontains $ConfigurationData.ConfigData.Version))
+                    if($ServerTypeName -ieq "NotebookServer" -and (@("10.9.1","11.0","11.1","11.2","11.3") -icontains $ConfigurationData.ConfigData.Version))
                     {
                         ArcGIS_Install "NotebookServerSamplesData$($Node.NodeName)"
                         { 
@@ -95,16 +103,6 @@
 
                 }
                 'Portal' {
-                    if($ConfigurationData.ConfigData.WorkflowMangerWebApp) 
-                    {
-                        ArcGIS_Install WorkflowManagerWebAppUninstall
-                        {
-                            Name = "WorkflowMangerWebApp"
-                            Version = $ConfigurationData.ConfigData.Version
-                            Ensure = "Absent"
-                        }
-                    }
-
                     ArcGIS_Install "PortalUninstall$($Node.NodeName)"
                     { 
                         Name = "Portal"
@@ -112,8 +110,7 @@
                         Ensure = "Absent"
                     }
 
-                    $VersionArray = $ConfigurationData.ConfigData.Version.Split(".")
-                    if(($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -and $VersionArray[1] -gt 7) -or $Version -ieq "10.7.1") -and $ConfigurationData.ConfigData.Portal.Installer.WebStylesPath){
+                    if($ConfigurationData.ConfigData.Portal.Installer.WebStylesPath){
                         ArcGIS_Install "WebStylesUninstall$($Node.NodeName)"
                         { 
                             Name = "WebStyles"
@@ -194,26 +191,6 @@
                         Credential = $ServiceCredential
                         IsDomainAccount = $ServiceCredentialIsDomainAccount
                         IsMSAAccount = $ServiceCredentialIsMSA
-                    }
-                }
-                'Desktop' {
-                    if($ConfigurationData.ConfigData.Desktop.Extensions){
-                        foreach ($Extension in $ConfigurationData.ConfigData.Desktop.Extensions.GetEnumerator())
-                        {
-                            ArcGIS_Install "Desktop$($Extension.Key)UninstallExtension"
-                            {
-                                Name = "Desktop$($Extension.Key)"
-                                Version = $ConfigurationData.ConfigData.DesktopVersion
-                                Ensure = "Absent"
-                            }
-                        }
-                    }
-
-                    ArcGIS_Install DesktopUninstall
-                    { 
-                        Name = "Desktop"
-                        Version = $ConfigurationData.ConfigData.DesktopVersion
-                        Ensure = "Absent"
                     }
                 }
                 'Pro' {

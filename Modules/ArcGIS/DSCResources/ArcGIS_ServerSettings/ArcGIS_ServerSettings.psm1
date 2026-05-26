@@ -5,596 +5,558 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
+
 function Get-TargetResource
 {
 	[CmdletBinding()]
 	[OutputType([System.Collections.Hashtable])]
 	param
-	(
-        [parameter(Mandatory = $false)]
-		[System.String]
-        $ServerContext,
-        
-        [parameter(Mandatory = $true)]
-		[System.String]
-		$ServerHostName,
-
-		[parameter(Mandatory = $false)]
-		[System.String]
-		$ExternalDNSName,
-
-	    [System.String]
-		$ServerEndPoint,
-
-		[System.Management.Automation.PSCredential]
-		$SiteAdministrator,
-
-		[System.Boolean]
-        $DisableServiceDirectory,
-
+    (
+        [parameter(Mandatory = $true)]    
         [System.String]
-        $SharedKey
-	)
+        $ServerHostName,
 
-	$null
+        [parameter(Mandatory = $true)]    
+        [ValidateSet("Server","NotebookServer","MissionServer","VideoServer","DataPipelinesServer")]
+        [System.String]
+        $ServerType
+    )
+    
+    return @{}
 }
 
 function Set-TargetResource
 {
 	[CmdletBinding()]
-	param(
-		[parameter(Mandatory = $true)]
+	[OutputType([System.Collections.Hashtable])]
+	param(	
+        [parameter(Mandatory = $true)]    
+        [System.String]
+        $ServerHostName,
+
+        [parameter(Mandatory = $true)]
+        [System.Management.Automation.PSCredential]
+        $SiteAdministrator,
+
+        [parameter(Mandatory = $true)]
+        [ValidateSet("Server","NotebookServer","MissionServer","VideoServer","DataPipelinesServer")]
+        [System.String]
+        $ServerType, 
+
+        [parameter(Mandatory = $false)]
+        [System.String]
+        $WebContextURL,    
+
+        [parameter(Mandatory = $false)]
+        [System.String]
+        $WebSocketContextUrl,
+
+        [parameter(Mandatory = $false)]
+        [System.Boolean]
+        $DisableDockerHealthCheck,
+        
+        [parameter(Mandatory = $false)]
+        [System.Boolean]
+        $DisableServiceDirectory,
+
+        [parameter(Mandatory = $false)]
 		[System.String]
-		$ServerHostName,
+		$SharedKey,
 
-		[parameter(Mandatory = $false)]
-		[System.String]
-		$ExternalDNSName,
+        [parameter(Mandatory = $false)]
+        [System.String]                 
+        $HttpProxyHost,
 
-		[parameter(Mandatory = $false)]
-		[System.String]
-		$ServerContext,
-
-		[System.Management.Automation.PSCredential]
-		$SiteAdministrator,
-
-		[parameter(Mandatory = $false)]
-		[System.string]                 
-		$HttpProxyHost,
-
-		[parameter(Mandatory = $false)]
-		[AllowNull()]
+        [parameter(Mandatory = $false)]
+        [AllowNull()]
         [Nullable[System.UInt32]]                
-		$HttpProxyPort,
+        $HttpProxyPort,
 
-		[parameter(Mandatory = $false)]
-		[System.Management.Automation.PSCredential]           
-		$HttpProxyCredential,
+        [parameter(Mandatory = $false)]
+        [System.Management.Automation.PSCredential]           
+        $HttpProxyCredential,
 
-		[parameter(Mandatory = $false)]
-		[System.string]                 
-		$HttpsProxyHost,
+        [parameter(Mandatory = $false)]
+        [System.String]                 
+        $HttpsProxyHost,
 
-		[parameter(Mandatory = $false)]
-		[AllowNull()]
-        [Nullable[System.UInt32]]              
-		$HttpsProxyPort,
+        [parameter(Mandatory = $false)]
+        [AllowNull()]
+        [Nullable[System.UInt32]]                
+        $HttpsProxyPort,
 
-		[parameter(Mandatory = $false)]
-		[System.Management.Automation.PSCredential]           
-		$HttpsProxyCredential,
+        [parameter(Mandatory = $false)]
+        [System.Management.Automation.PSCredential]           
+        $HttpsProxyCredential,
 
-		[parameter(Mandatory = $false)]
-		[System.string]                 
-		$NonProxyHosts,
+        [parameter(Mandatory = $false)]
+        [System.String]                 
+        $NonProxyHosts,
 
-		[System.Boolean]
-		$DisableServiceDirectory,
+        [parameter(Mandatory = $false)]
+        [System.String]                 
+        $VideoServerLivestreamGatewayHostname,
 
-		[System.String]
-		$SharedKey
-    )
+        [parameter(Mandatory = $false)]
+        [System.String]                 
+        $VideoServerLiveStreamPorts
+	)
     
-	[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
-	$ServerFQDN = Get-FQDN $ServerHostName
-	$ServerHttpsUrl = "https://$($ServerFQDN):6443" 
-    $Referer = $ServerHttpsUrl
-	
-	Write-Verbose "Getting Server Token for user '$($SiteAdministrator.UserName)' from '$ServerHttpsUrl'"
-	$UpdateSystemProperties = $false
+    [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 
-	$serverToken = Get-ServerToken -ServerEndPoint $ServerHttpsUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer
-    if(-not($serverToken.token)) {
-        Write-Verbose "Get Server Token Response:- $serverToken"
-        throw "Unable to retrieve Server Token for '$($SiteAdministrator.UserName)'"
+    if($VerbosePreference -ine 'SilentlyContinue') 
+    {        
+        Write-Verbose ("Site Administrator UserName:- " + $SiteAdministrator.UserName) 
     }
-	Write-Verbose "Connected to Server successfully and retrieved token for '$($SiteAdministrator.UserName)'"
 
-	$serverSysProps = Get-ServerSystemProperties -ServerHostName $ServerFQDN -Token $serverToken.token -Referer $Referer
-	if($serverSysProps) {
-		Write-Verbose "System Properties:- $(ConvertTo-Json $serverSysProps -Depth 3 -Compress)"
-	}else {
-		Write-Verbose "System Properties is NULL"
-	}
-	# checking forward proxy settings
+    $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
+    Write-Verbose "Server Type:- $ServerType , Fully Qualified Domain Name :- $FQDN"
+    
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName $ServerType -FQDN $FQDN
+	Write-Verbose "Waiting for Server '$ServerBaseUrl'"
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -Verbose
+    $Referer = "https://localhost"
+    
+	$token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer
+ 
+    $AdminSettingsModified = $False
+    $systemProperties = Get-SystemProperties -URL $ServerBaseUrl -Token $token.token -Referer $Referer
+    if($WebContextURL -and (-not($systemProperties.WebContextURL) -or $systemProperties.WebContextURL -ine $WebContextURL)){
+        Write-Verbose "Web Context URL '$($systemProperties.WebContextURL)' doesn't match expected value '$WebContextURL'"
+        if(-not($systemProperties.WebContextURL)){
+            Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name "WebContextURL" -Value $WebContextURL
+        }else{
+            $systemProperties.WebContextURL = $WebContextURL
+        }
+        $AdminSettingsModified = $True
+    }
+    
+    if($ServerType -ieq "MissionServer" -and $WebSocketContextUrl -and (-not($systemProperties.WebSocketContextURL) -or $systemProperties.WebSocketContextURL -ine $WebSocketContextUrl)){
+        Write-Verbose "Web Socket Context URL '$($systemProperties.WebSocketContextURL)' doesn't match expected value '$WebSocketContextUrl'"
+        if(-not($systemProperties.WebSocketContextURL)){
+            Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name "WebSocketContextURL" -Value $WebSocketContextUrl
+        }else{
+            $systemProperties.WebSocketContextURL = $WebSocketContextUrl
+        }
+        $AdminSettingsModified = $True
+    }
+
+    if($ServerType -ine "Server"){
+        if($systemProperties.disableServicesDirectory -ine $DisableServiceDirectory){
+            if(Get-Member -InputObject $systemProperties -name "disableServicesDirectory" -Membertype NoteProperty){
+                $systemProperties.disableServicesDirectory = $DisableServiceDirectory
+            }else{
+                Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name "disableServicesDirectory" -Value $DisableServiceDirectory
+            }
+        
+            $AdminSettingsModified = $True
+        }
+    }
+
+    if($ServerType -ieq "NotebookServer" -and $systemProperties.disableDockerHealthCheck -ine $DisableDockerHealthCheck){
+        if(Get-Member -InputObject $systemProperties -name "disableDockerHealthCheck" -Membertype NoteProperty){
+            $systemProperties.disableDockerHealthCheck = $DisableDockerHealthCheck
+        }else{
+            Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name "disableDockerHealthCheck" -Value $DisableDockerHealthCheck
+        }
+        $AdminSettingsModified = $True
+    }
+
+    if($ServerType -ieq "VideoServer"){
+        if($VideoServerLivestreamGatewayHostname -and (-not($systemProperties.LivestreamGatewayHostname) -or $systemProperties.LivestreamGatewayHostname -ine $VideoServerLivestreamGatewayHostname)){
+            Write-Verbose "Video Server Live stream gateway host name '$($systemProperties.LivestreamGatewayHostname)' doesn't match expected value '$VideoServerLivestreamGatewayHostname'"
+            if(-not($systemProperties.LivestreamGatewayHostname)){
+                Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name "LivestreamGatewayHostname" -Value $VideoServerLivestreamGatewayHostname
+            }else{
+                $systemProperties.LivestreamGatewayHostname = $VideoServerLivestreamGatewayHostname
+            }
+            $AdminSettingsModified = $True
+        }
+
+        if($VideoServerLiveStreamPorts){
+            if(Test-VideoServerLiveStreamPortsNeedsUpdates -URL $ServerBaseUrl -Token $token.token -Referer $Referer -Ports $VideoServerLiveStreamPorts -Verbose){
+                Write-Verbose "Video Server live stream ports do not match expected values"
+                Set-UpdateVideoServerLivestreamPorts -URL $ServerBaseUrl -Token $token.token -Referer $Referer -Ports $VideoServerLiveStreamPorts -Verbose
+                Write-Verbose "Video Server live stream ports updated."
+            }
+        }
+    }
+    # checking forward proxy settings
 	if ($HttpProxyHost) {
-		if(-not($serverSysProps.HttpProxyHost)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpProxyHost' -Value $HttpProxyHost
+		if(-not($systemProperties.HttpProxyHost)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpProxyHost' -Value $HttpProxyHost
 		}else{
-			$serverSysProps.HttpProxyHost = $HttpProxyHost
+			$systemProperties.HttpProxyHost = $HttpProxyHost
 		}
-		$UpdateSystemProperties = $true
+		$AdminSettingsModified = $true
 	}
-	elseif ($serverSysProps.HttpProxyHost) {
+	elseif ($systemProperties.HttpProxyHost) {
         # JSON removed it, so clear it
-        $serverSysProps.PSObject.Properties.Remove('httpProxyHost')
-        $UpdateSystemProperties = $true
+        $systemProperties.PSObject.Properties.Remove('httpProxyHost')
+        $AdminSettingsModified = $true
     }
+    
 	if ($HttpProxyPort) {
-		if(-not($serverSysProps.HttpProxyPort)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpProxyPort' -Value $HttpProxyPort
+		if(-not($systemProperties.HttpProxyPort)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpProxyPort' -Value $HttpProxyPort
 		}else{
-			$serverSysProps.HttpProxyPort = $HttpProxyPort
+			$systemProperties.HttpProxyPort = $HttpProxyPort
 		}
-		$UpdateSystemProperties = $true
+		$AdminSettingsModified = $true
 	}
-	elseif ($serverSysProps.HttpProxyPort) {
-        $serverSysProps.PSObject.Properties.Remove('httpProxyPort')
-        $UpdateSystemProperties = $true
+	elseif ($systemProperties.HttpProxyPort) {
+        $systemProperties.PSObject.Properties.Remove('httpProxyPort')
+        $AdminSettingsModified = $true
     }
 	if ($HttpProxyCredential) {
-		if(-not($serverSysProps.HttpProxyUser)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpProxyUser' -Value $HttpProxyCredential.UserName
+		if(-not($systemProperties.HttpProxyUser)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpProxyUser' -Value $HttpProxyCredential.UserName
 		}else{
-			$serverSysProps.HttpProxyUser = $HttpProxyCredential.UserName
+			$systemProperties.HttpProxyUser = $HttpProxyCredential.UserName
 		}
-		if(-not($serverSysProps.HttpProxyPassword)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpProxyPassword' -Value $HttpProxyCredential.GetNetworkCredential().Password
+		if(-not($systemProperties.HttpProxyPassword)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpProxyPassword' -Value $HttpProxyCredential.GetNetworkCredential().Password
 		}else{
-			$serverSysProps.HttpProxyPassword = $HttpProxyCredential.GetNetworkCredential().Password
+			$systemProperties.HttpProxyPassword = $HttpProxyCredential.GetNetworkCredential().Password
 		}
-
-		if(-not($serverSysProps.IsHttpProxyPasswordEncrypted)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'isHttpProxyPasswordEncrypted' -Value $false
-		}else{
-			$serverSysProps.IsHttpProxyPasswordEncrypted = $false
-		}
-
-		$UpdateSystemProperties = $true
+		$AdminSettingsModified = $true
 	}
-	elseif ($serverSysProps.HttpProxyUser -or $serverSysProps.HttpProxyPassword) {
-        $serverSysProps.PSObject.Properties.Remove('httpProxyUser')
-        $serverSysProps.PSObject.Properties.Remove('httpProxyPassword')
-
-		$serverSysProps.PSObject.Properties.Remove('isHttpProxyPasswordEncrypted')
-        $UpdateSystemProperties = $true
+	elseif ($systemProperties.HttpProxyUser -or $systemProperties.HttpProxyPassword) {
+        $systemProperties.PSObject.Properties.Remove('httpProxyUser')
+        $systemProperties.PSObject.Properties.Remove('httpProxyPassword')
+        $AdminSettingsModified = $true
     }
 	# Forward proxy HTTPS Proxy: set or clear
 	if ($HttpsProxyHost) {
-		if(-not($serverSysProps.HttpsProxyHost)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpsProxyHost' -Value $HttpsProxyHost
+		if(-not($systemProperties.HttpsProxyHost)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpsProxyHost' -Value $HttpsProxyHost
 		}else{
-			$serverSysProps.HttpsProxyHost = $HttpsProxyHost
+			$systemProperties.HttpsProxyHost = $HttpsProxyHost
 		}
-		$UpdateSystemProperties = $true
+		$AdminSettingsModified = $true
 	}
-	elseif ($serverSysProps.HttpsProxyHost) {
+	elseif ($systemProperties.HttpsProxyHost) {
         # JSON removed it, so clear it
-        $serverSysProps.PSObject.Properties.Remove('httpsProxyHost')
-        $UpdateSystemProperties = $true
+        $systemProperties.PSObject.Properties.Remove('httpsProxyHost')
+        $AdminSettingsModified = $true
     }
 	if ($HttpsProxyPort) {
-		if(-not($serverSysProps.HttpsProxyPort)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpsProxyPort' -Value $HttpsProxyPort
+		if(-not($systemProperties.HttpsProxyPort)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpsProxyPort' -Value $HttpsProxyPort
 		}else{
-			$serverSysProps.HttpsProxyPort = $HttpsProxyPort
+			$systemProperties.HttpsProxyPort = $HttpsProxyPort
 		}
-		$UpdateSystemProperties = $true
+		$AdminSettingsModified = $true
 	}
-	elseif ($serverSysProps.HttpsProxyPort) {
-        $serverSysProps.PSObject.Properties.Remove('httpsProxyPort')
-        $UpdateSystemProperties = $true
+	elseif ($systemProperties.HttpsProxyPort) {
+        $systemProperties.PSObject.Properties.Remove('httpsProxyPort')
+        $AdminSettingsModified = $true
     }
 	if ($HttpsProxyCredential) {
-		if(-not($serverSysProps.HttpsProxyUser)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpsProxyUser' -Value $HttpsProxyCredential.UserName
+		if(-not($systemProperties.HttpsProxyUser)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpsProxyUser' -Value $HttpsProxyCredential.UserName
 		}else{
-			$serverSysProps.HttpsProxyUser = $HttpsProxyCredential.UserName
+			$systemProperties.HttpsProxyUser = $HttpsProxyCredential.UserName
 		}
-		if(-not($serverSysProps.HttpsProxyPassword)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'httpsProxyPassword' -Value $HttpsProxyCredential.GetNetworkCredential().Password
+		if(-not($systemProperties.HttpsProxyPassword)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'httpsProxyPassword' -Value $HttpsProxyCredential.GetNetworkCredential().Password
 		}else{
-			$serverSysProps.HttpsProxyPassword = $HttpsProxyCredential.GetNetworkCredential().Password
+			$systemProperties.HttpsProxyPassword = $HttpsProxyCredential.GetNetworkCredential().Password
 		}
-		if(-not($serverSysProps.IsHttpsProxyPasswordEncrypted  )) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'isHttpsProxyPasswordEncrypted' -Value $false
-		}else{
-			$serverSysProps.IsHttpsProxyPasswordEncrypted  = $false
-		}
-		$UpdateSystemProperties = $true
+		$AdminSettingsModified = $true
 	}
-	elseif ($serverSysProps.HttpsProxyUser -or $serverSysProps.HttpsProxyPassword) {
-        $serverSysProps.PSObject.Properties.Remove('httpsProxyUser')
-        $serverSysProps.PSObject.Properties.Remove('httpsProxyPassword')
-
-		$serverSysProps.PSObject.Properties.Remove('isHttpsProxyPasswordEncrypted')
-        $UpdateSystemProperties = $true
+	elseif ($systemProperties.HttpsProxyUser -or $systemProperties.HttpsProxyPassword) {
+        $systemProperties.PSObject.Properties.Remove('httpsProxyUser')
+        $systemProperties.PSObject.Properties.Remove('httpsProxyPassword')
+        $AdminSettingsModified = $true
     }
 
 	if ($NonProxyHosts) {
-		if(-not($serverSysProps.NonProxyHosts)) {
-			Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'nonProxyHosts' -Value $NonProxyHosts
+		if(-not($systemProperties.NonProxyHosts)) {
+			Add-Member -InputObject $systemProperties -MemberType NoteProperty -Name 'nonProxyHosts' -Value $NonProxyHosts
 		}else{
-			$serverSysProps.NonProxyHosts = $NonProxyHosts
+			$systemProperties.NonProxyHosts = $NonProxyHosts
 		}
-		$UpdateSystemProperties = $true
+		$AdminSettingsModified = $true
 	}
-	elseif ($serverSysProps.NonProxyHosts) {
-        $serverSysProps.PSObject.Properties.Remove('nonProxyHosts')
-        $UpdateSystemProperties = $true
+	elseif ($systemProperties.NonProxyHosts) {
+        $systemProperties.PSObject.Properties.Remove('nonProxyHosts')
+        $AdminSettingsModified = $true
     }
 
-	if ($ExternalDNSName){
-		$ExpectedServerWebContextUrl = "https://$($ExternalDNSName)/$($ServerContext)"	
-		if($serverSysProps.WebContextURL -ieq $ExpectedServerWebContextUrl) {
-			Write-Verbose "Server System Properties > WebContextUrl is correctly set to '$($ExpectedServerWebContextUrl)'"
-		}else{
-			$UpdateSystemProperties = $true
-			Write-Verbose "Server System Properties > WebContextUrl is NOT correctly set to '$($ExpectedServerWebContextUrl)'"
-			if(-not($serverSysProps.WebContextURL)) {
-				Add-Member -InputObject $serverSysProps -MemberType NoteProperty -Name 'WebContextURL' -Value $ExpectedServerWebContextUrl
-			}else{
-				$serverSysProps.WebContextURL = $ExpectedServerWebContextUrl
-			}
-		}
-	}
+    if($AdminSettingsModified){
+        Set-SystemProperties -URL $ServerBaseUrl -Token $token.token -Properties $systemProperties -Referer $Referer
 
-	if($UpdateSystemProperties ){	
-		Write-Verbose "Updating Server System Properties"
-		Set-ServerSystemProperties -ServerHostName $ServerFQDN -Token $serverToken.token -Referer $Referer -Properties $serverSysProps
-		Write-Verbose "Updated Server System Properties"
-	}
+        Write-Verbose "Admin system settings updated."
 
-	Write-Verbose "Waiting for Url 'https://$($ServerFQDN):6443/arcgis/rest/info/healthCheck' to respond"
-	Wait-ForUrl -Url "https://$($ServerFQDN):6443/arcgis/rest/info/healthCheck?f=json" -SleepTimeInSeconds 10 -MaxWaitTimeInSeconds 150 -HttpMethod 'GET' -Verbose
-
-	Write-Verbose "Get Service Directory Setting"
-	$servicesdirectory = Get-AdminSettings -ServerUrl $ServerHttpsUrl -SettingUrl "arcgis/admin/system/handlers/rest/servicesdirectory" -Token $serverToken.token -Referer $Referer
-	if($servicesdirectory.enabled -eq "true") {
-		$dirStatus = "enabled"
-	} else {
-		$dirStatus = "disabled"
-	}
-	Write-Verbose "Current Service Directory Setting:- $dirStatus"
-	if($servicesdirectory.enabled -eq $DisableServiceDirectory) {
-		Write-Verbose "Updating Service Directory Setting"
-		$servicesdirectory.enabled = (!$DisableServiceDirectory)
-		$servicesdirectory = ConvertTo-Json $servicesdirectory
-		Set-AdminSettings -ServerUrl $ServerHttpsUrl -SettingUrl "arcgis/admin/system/handlers/rest/servicesdirectory/edit" -Token $serverToken.token -Properties $servicesdirectory -Referer $Referer
-	}
-	
-	if($SharedKey){
-		Write-Verbose "Get Token and Shared Key Setting"
-		$TokenSettings = Get-AdminSettings -ServerUrl $ServerHttpsUrl -SettingUrl "arcgis/admin/security/tokens" -Token $serverToken.token -Referer $Referer	
-		if($TokenSettings.properties.sharedKey -ine $SharedKey){
-			Write-Verbose "Shared Key is not set as expected. Updating shared key."	
-			$TokenSettings.properties.sharedKey = $SharedKey
-			$TokenSettings = ConvertTo-Json $TokenSettings
-			Set-TokenSettings -ServerUrl $ServerHttpsUrl -SettingUrl "arcgis/admin/security/tokens/update" -Token $serverToken.token -Properties $TokenSettings -Referer $Referer
-		}else{
-			Write-Verbose "Shared Key is set as expected"
-		}
-	}
+        $MaxWaitTimeInSeconds = 120
+        $SleepTimeInSeconds = 10
+        Write-Verbose "Waiting for up to $($MaxWaitTimeInSeconds) seconds for server to restart"
+        $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName $ServerType -FQDN $FQDN
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $Done = $False;
+        while((-not($Done)) -and ($stopwatch.Elapsed.TotalSeconds -lt $MaxWaitTimeInSeconds)) {
+            try{
+                # if available sleep and try again.
+                Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -MaxWaitTimeInSeconds 10 -Verbose -ThrowErrors $true
+                Write-Verbose "Server is still available. Trying again in $($SleepTimeInSeconds) seconds"
+                Start-Sleep -Seconds $SleepTimeInSeconds
+            }catch{
+                # if error and most likely server has become unavailable then exit loop
+                Write-Verbose "Server is likely restarting as result of update of system properties:- $($_)"
+                $Done = $true
+            }
+        }
+        $stopwatch.Stop()
+        
+        Write-Verbose "Waiting up to 6 minutes for Server endpoint '$($ServerBaseUrl)' to come back up"
+        Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -MaxWaitTimeInSeconds 360 -Verbose
+        Write-Verbose "Finished waiting for server endpoint '$($ServerBaseUrl)' to come back up"
+    }
     
-    Write-Verbose "Waiting for Url 'https://$($ServerFQDN):6443/arcgis/rest/info/healthCheck' to respond"
-	Wait-ForUrl -Url "https://$($ServerFQDN):6443/arcgis/rest/info/healthCheck?f=json" -SleepTimeInSeconds 10 -MaxWaitTimeInSeconds 150 -HttpMethod 'GET' -Verbose
+    if($ServerType -ieq "Server"){
+        Update-ServiceDirectorySettings -URL $ServerBaseUrl -Token $token.token -Referer $Referer -DisableServiceDirectory $DisableServiceDirectory -Verbose
+
+        Update-SecurityTokenSharedKey -URL $ServerBaseUrl -Token $token.token -Referer $Referer -SharedKey $SharedKey
+    }
 }
 
 function Test-TargetResource
 {
-	[CmdletBinding()]
+    [CmdletBinding()]
 	[OutputType([System.Boolean])]
-	param(
-		[parameter(Mandatory = $false)]
+	param(   
+        [parameter(Mandatory = $true)]    
+        [System.String]
+        $ServerHostName,
+
+        [parameter(Mandatory = $true)]
+        [System.Management.Automation.PSCredential]
+        $SiteAdministrator,
+
+        [parameter(Mandatory = $true)]
+        [ValidateSet("Server","NotebookServer","MissionServer","VideoServer","DataPipelinesServer")]
+        [System.String]
+        $ServerType, 
+
+        [parameter(Mandatory = $false)]
+        [System.String]
+        $WebContextURL,    
+
+        [parameter(Mandatory = $false)]
+        [System.String]
+        $WebSocketContextUrl,
+
+        [parameter(Mandatory = $false)]
+        [System.Boolean]
+        $DisableDockerHealthCheck,
+        
+        [parameter(Mandatory = $false)]
+        [System.Boolean]
+        $DisableServiceDirectory,
+
+        [parameter(Mandatory = $false)]
 		[System.String]
-		$ServerContext,
-		
-		[parameter(Mandatory = $true)]
-		[System.String]
-		$ServerHostName,
+		$SharedKey,
 
-		[parameter(Mandatory = $false)]
-		[System.String]
-		$ExternalDNSName,
+        [parameter(Mandatory = $false)]
+        [System.string]                 
+        $HttpProxyHost,
 
-		[System.Management.Automation.PSCredential]
-		$SiteAdministrator,
+        [parameter(Mandatory = $false)]
+        [AllowNull()]
+        [Nullable[System.UInt32]]                
+        $HttpProxyPort,
 
-		[parameter(Mandatory = $false)]
-		[System.string]                 
-		$HttpProxyHost,
+        [parameter(Mandatory = $false)]
+        [System.Management.Automation.PSCredential]           
+        $HttpProxyCredential,
 
-		[parameter(Mandatory = $false)]
-		[AllowNull()]
-        [Nullable[System.UInt32]]                    
-		$HttpProxyPort,
+        [parameter(Mandatory = $false)]
+        [System.string]                 
+        $HttpsProxyHost,
 
-		[parameter(Mandatory = $false)]
-		[System.Management.Automation.PSCredential]           
-		$HttpProxyCredential,
+        [parameter(Mandatory = $false)]
+        [AllowNull()]
+        [Nullable[System.UInt32]]                
+        $HttpsProxyPort,
 
-		[parameter(Mandatory = $false)]
-		[System.string]                 
-		$HttpsProxyHost,
+        [parameter(Mandatory = $false)]
+        [System.Management.Automation.PSCredential]           
+        $HttpsProxyCredential,
 
-		[parameter(Mandatory = $false)]
-		[AllowNull()]
-        [Nullable[System.UInt32]]               
-		$HttpsProxyPort,
+        [parameter(Mandatory = $false)]
+        [System.string]                 
+        $NonProxyHosts,
 
-		[parameter(Mandatory = $false)]
-		[System.Management.Automation.PSCredential]           
-		$HttpsProxyCredential,
+        [parameter(Mandatory = $false)]
+        [System.String]                 
+        $VideoServerLivestreamGatewayHostname,
 
-		[parameter(Mandatory = $false)]
-		[System.string]                 
-		$NonProxyHosts,
-
-		[System.Boolean]
-		$DisableServiceDirectory,
-
-		[System.String]
-		$SharedKey
+        [parameter(Mandatory = $false)]
+        [System.String]                 
+        $VideoServerLiveStreamPorts
     )
 
-	[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
-	$ServerFQDN = Get-FQDN $ServerHostName
-    $ServerHttpsUrl = "https://$($ServerFQDN):6443" 
-    $Referer = $ServerHttpsUrl	
-    Write-Verbose "Getting Server Token for user '$($SiteAdministrator.UserName)' from 'https://$($ServerFQDN):6443'"
+    [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
+    $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
+    Write-Verbose "Server Type:- $ServerType , Fully Qualified Domain Name :- $FQDN"
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName $ServerType -FQDN $FQDN
 
-    $serverToken = Get-ServerToken -ServerEndPoint $ServerHttpsUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer
-    if(-not($serverToken.token)) {
-        Write-Verbose "Get Server Token Response:- $serverToken"
-        throw "Unable to retrieve Server Token for '$($SiteAdministrator.UserName)'"
+	Write-Verbose "Waiting for Server '$ServerBaseUrl' to initialize"
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -Verbose
+    $Referer = 'https://localhost'
+    
+    $token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer
+    $result = ($null -ne $token.token)
+    if($result){
+        Write-Verbose "Site Exists. Was able to retrieve token for PSA"
+    }else{
+        throw "Unable to detect if site exists. Unable to retrieve token for PSA"
     }
-    Write-Verbose "Connected to Server successfully and retrieved token for '$($SiteAdministrator.UserName)'"
-	$result = $true
-	
-	if($result){
-		$serverSysProps = Get-ServerSystemProperties -ServerHostName $ServerFQDN -Token $serverToken.token -Referer $Referer	
-		if($serverSysProps) {
-			Write-Verbose "System Properties:- $(ConvertTo-Json $serverSysProps -Depth 3 -Compress)"
-		}else {
-			Write-Verbose "System Properties is NULL"
-		}
-		if($ExternalDNSName){
-			$ExpectedServerWebContextUrl = "https://$($ExternalDNSName)/$($ServerContext)"	
-			if($serverSysProps.WebContextURL -ieq $ExpectedServerWebContextUrl) {
-				Write-Verbose "Server System Properties > WebContextUrl is correctly set to '$($ExpectedServerWebContextUrl)'"
-			}else{
-				$result = $false
-				Write-Verbose "Server System Properties > WebContextUrl is NOT correctly set to '$($ExpectedServerWebContextUrl)'"
-			}
-		}
-	}
-
-	if($result) {
-        Write-Verbose "Get Service Directory Setting"
-        $servicesdirectory = Get-AdminSettings -ServerUrl $ServerHttpsUrl -SettingUrl "arcgis/admin/system/handlers/rest/servicesdirectory" -Token $serverToken.token -Referer $Referer
-        if($servicesdirectory.enabled -eq "true") {
-            $dirStatus = "enabled"
-        } else {
-            $dirStatus = "disabled"
+   
+    $result = $true
+    $SystemProperties = Get-SystemProperties -URL $ServerBaseUrl -Token $token.token -Referer $Referer
+    if($result -and $WebContextURL){    
+        if(-not($systemProperties.WebContextURL) -or $systemProperties.WebContextURL -ine $WebContextURL){
+            Write-Verbose "Web Context URL '$($systemProperties.WebContextURL)' doesn't match expected value '$WebContextURL'"
+            $result = $false
         }
-        Write-Verbose "Current Service Directory Setting:- $dirStatus"
-        if($servicesdirectory.enabled -eq $DisableServiceDirectory) {
+    }
+    
+    # Only for Mission Server
+    if($ServerType -ieq "MissionServer" -and $result -and $WebSocketContextUrl){
+        if(-not($systemProperties.WebSocketContextURL) -or $systemProperties.WebSocketContextURL -ine $WebContextURL){
+            Write-Verbose "Web Socket Context URL '$($systemProperties.WebSocketContextURL)' doesn't match expected value '$WebSocketContextUrl'"
             $result = $false
         }
     }
 
-	if($result -and $SharedKey) {
-		Write-Verbose "Get Token and Shared Key Setting"
-        $TokenSettings = Get-AdminSettings -ServerUrl $ServerHttpsUrl -SettingUrl "arcgis/admin/security/tokens" -Token $serverToken.token -Referer $Referer
-		if($TokenSettings.properties.sharedKey -ine $SharedKey){
+    if($result){
+        if($ServerType -ieq "Server"){
+            $ServiceDirectoryProperties = Get-ServiceDirectorySettings -URL $ServerBaseUrl -Token $token.token -Referer $Referer -Verbose
+            Write-Verbose "Service Directory enabled:- $($ServiceDirectoryProperties.enabled)"
+            if([System.Convert]::ToBoolean($ServiceDirectoryProperties.enabled) -ine -not($DisableServiceDirectory)) {
+                $result = $false
+            }
+        }else{
+            if($systemProperties.disableServicesDirectory -ine $DisableServiceDirectory){
+                $result = $false
+            }
+        }
+
+        if(-not($result)){
+            Write-Verbose "DisableServicesDirectory for '$($ServerType)' doesn't match expected value '$DisableServiceDirectory'"
+        }
+    }
+
+    if($result -and ($ServerType -ieq "Server") -and $SharedKey) {
+		Write-Verbose "Get Token and Shared Key setting"
+		$CurrentSharedKey = Get-SecurityTokenSharedKey -URL $ServerBaseUrl -Token $token.token -Referer $Referer
+		if($CurrentSharedKey -ine $SharedKey){
 			Write-Verbose "Shared Key is not set as expected"
 			$result = $false
 		}else{
 			Write-Verbose "Shared Key is set as expected"
 		}
     }
-	$ProtocolSettings = @(
-        [PSCustomObject]@{ Prefix = 'Http';  CredentialParam = 'HttpProxyCredential'  },
-        [PSCustomObject]@{ Prefix = 'Https'; CredentialParam = 'HttpsProxyCredential' }
-    )
 
-	foreach ($Protocol in $ProtocolSettings) {
-        $Prefix                 = $Protocol.Prefix
-        $ProxyHostParamName     = "${Prefix}ProxyHost"
-        $ProxyPortParamName     = "${Prefix}ProxyPort"
-        $ProxyCredentialParam   = $Protocol.CredentialParam
+    # Only for Notebook Server
+    if($result -and ($ServerType -ieq "NotebookServer") -and $systemProperties.DisableDockerHealthCheck -ine $DisableDockerHealthCheck){
+        Write-Verbose "DisableDockerHealthCheck setting for Notebook Server doesn't match expected value '$DisableDockerHealthCheck'"
+        $result = $false
+    }
 
-        # Grab the parameter values by name
-        $ProxyHostValue         = Get-Variable -Name $ProxyHostParamName       -ValueOnly
-        $ProxyPortValue         = Get-Variable -Name $ProxyPortParamName       -ValueOnly
-        $ProxyCredentialValue   = Get-Variable -Name $ProxyCredentialParam     -ValueOnly
-
-        # Grab the server’s current system properties
-        $ServerProxyHost        = $ServerSysProps."${Prefix}ProxyHost"
-        $ServerProxyPort        = $ServerSysProps."${Prefix}ProxyPort"
-        $ServerProxyUser        = $ServerSysProps."${Prefix}ProxyUser"
-        $ServerProxyPassword    = $ServerSysProps."${Prefix}ProxyPassword"
-
-        # If user supplied any proxy info, compare them
-        if ($ProxyHostValue -or $ProxyPortValue -or $ProxyCredentialValue) {
-            if ($ProxyHostValue -and $ServerProxyHost -ne $ProxyHostValue) {
-                Write-Verbose "$Prefix ProxyHost mismatch (`"$ServerProxyHost`" vs `"$ProxyHostValue`")"
-                $result = $false
-            }
-            if ($ProxyPortValue -and $ServerProxyPort -ne $ProxyPortValue) {
-                Write-Verbose "$Prefix ProxyPort mismatch (`"$ServerProxyPort`" vs `"$ProxyPortValue`")"
-                $result = $false
-            }
-            if ($ProxyCredentialValue) {
-                $UserName = $ProxyCredentialValue.UserName
-                $Password = $ProxyCredentialValue.GetNetworkCredential().Password
-
-                if ($ServerProxyUser -ne $UserName) {
-                    Write-Verbose "$Prefix ProxyUser mismatch (`"$ServerProxyUser`" vs `"$UserName`")"
-                    $result = $false
-                }
-                if ($ServerProxyPassword -ne $Password) {
-                    Write-Verbose "$Prefix ProxyPassword mismatch"
-                    $result = $false
-                }
-            }
-        }
-        # Otherwise, if nothing in JSON but server has a value => mismatch
-        elseif ($ServerProxyHost -or $ServerProxyPort -or $ServerProxyUser -or $ServerProxyPassword) {
-            Write-Verbose "$Prefix proxy present on server but absent in JSON"
+    if($result -and $ServerType -ieq "VideoServer"){
+        if($VideoServerLivestreamGatewayHostname -and (-not($systemProperties.LivestreamGatewayHostname) -or $systemProperties.LivestreamGatewayHostname -ine $VideoServerLivestreamGatewayHostname)){
+            Write-Verbose "Video Server Live stream gateway host name '$($systemProperties.LivestreamGatewayHostname)' doesn't match expected value '$VideoServerLivestreamGatewayHostname'"
             $result = $false
         }
+        
+        if($result -and $VideoServerLiveStreamPorts){
+            if(Test-VideoServerLiveStreamPortsNeedsUpdates -URL $ServerBaseUrl -Token $token.token -Referer $Referer -Ports $VideoServerLiveStreamPorts -Verbose){
+                Write-Verbose "Video Server live stream ports do not match expected values"
+                $result = $false
+            }
+        }
+    }
 
-        if (-not $result) { break }
+    if ($result) {
+        #--- begin proxy test block ---
+        $ProtocolSettings = @(
+            [PSCustomObject]@{ Prefix = 'Http';  CredentialParam = 'HttpProxyCredential'  },
+            [PSCustomObject]@{ Prefix = 'Https'; CredentialParam = 'HttpsProxyCredential' }
+        )
+        foreach ($Protocol in $ProtocolSettings) {
+            $Prefix                 = $Protocol.Prefix
+            $ProxyHostParamName     = "${Prefix}ProxyHost"
+            $ProxyPortParamName     = "${Prefix}ProxyPort"
+            $ProxyCredentialParam   = $Protocol.CredentialParam
+
+            # Grab the parameter values by name
+            $ProxyHostValue         = Get-Variable -Name $ProxyHostParamName       -ValueOnly
+            $ProxyPortValue         = Get-Variable -Name $ProxyPortParamName       -ValueOnly
+            $ProxyCredentialValue   = Get-Variable -Name $ProxyCredentialParam     -ValueOnly
+
+            # Grab the server’s current system properties
+            $ServerProxyHost        = $systemProperties."${Prefix}ProxyHost"
+            $ServerProxyPort        = $systemProperties."${Prefix}ProxyPort"
+            $ServerProxyUser        = $systemProperties."${Prefix}ProxyUser"
+            $ServerProxyPassword    = $systemProperties."${Prefix}ProxyPassword"
+
+            # If user supplied any proxy info, compare them
+            if ($ProxyHostValue -or $ProxyPortValue -or $ProxyCredentialValue) {
+                if ($ProxyHostValue -and $ServerProxyHost -ne $ProxyHostValue) {
+                    Write-Verbose "$Prefix ProxyHost mismatch (`"$ServerProxyHost`" vs `"$ProxyHostValue`")"
+                    $result = $false
+                }
+                if ($ProxyPortValue -and $ServerProxyPort -ne $ProxyPortValue) {
+                    Write-Verbose "$Prefix ProxyPort mismatch (`"$ServerProxyPort`" vs `"$ProxyPortValue`")"
+                    $result = $false
+                }
+                if ($ProxyCredentialValue) {
+                    $UserName = $ProxyCredentialValue.UserName
+                    $Password = $ProxyCredentialValue.GetNetworkCredential().Password
+
+                    if ($ServerProxyUser -ne $UserName) {
+                        Write-Verbose "$Prefix ProxyUser mismatch (`"$ServerProxyUser`" vs `"$UserName`")"
+                        $result = $false
+                    }
+                    if ($ServerProxyPassword -ne $Password) {
+                        Write-Verbose "$Prefix ProxyPassword mismatch"
+                        $result = $false
+                    }
+                }
+            }
+            # Otherwise, if nothing in JSON but server has a value => mismatch
+            elseif ($ServerProxyHost -or $ServerProxyPort -or $ServerProxyUser -or $ServerProxyPassword) {
+                Write-Verbose "$Prefix proxy present on server but absent in JSON"
+                $result = $false
+            }
+
+            if (-not $result) { break }
+        }
     }
 
     # NonProxyHosts
     if ($result) {
         if ($NonProxyHosts) {
-            if ($ServerSysProps.NonProxyHosts -ne $NonProxyHosts) {
-                Write-Verbose "NonProxyHosts mismatch (`"$($ServerSysProps.NonProxyHosts)`" vs `"$NonProxyHosts`")"
+            if ($systemProperties.NonProxyHosts -ne $NonProxyHosts) {
+                Write-Verbose "NonProxyHosts mismatch (`"$($systemProperties.NonProxyHosts)`" vs `"$NonProxyHosts`")"
                 $result = $false
             }
         }
-        elseif ($ServerSysProps.NonProxyHosts) {
+        elseif ($systemProperties.NonProxyHosts) {
             Write-Verbose "NonProxyHosts present on server but absent in JSON"
             $result = $false
         }
     }
 
-	$result    
+    $result
 }
 
-function Get-ServerSystemProperties
-{
-    [CmdletBinding()]
-    param(        
-        [System.String]
-		$ServerHostName, 
-
-        [System.String]
-		$Token, 
-
-        [System.String]
-		$Referer
-    )
-    
-    Invoke-ArcGISWebRequest -Url ("https://$($ServerHostName):6443/arcgis/admin/system/properties/") -HttpMethod 'Get' -HttpFormParameters @{ f = 'json'; token = $Token } -Referer $Referer 
-}
-
-function Set-ServerSystemProperties
-{
-    [CmdletBinding()]
-    param(
-        
-        [System.String]
-		$ServerHostName, 
-
-        [System.String]
-		$Token, 
-
-        [System.String]
-		$Referer,
-
-        $Properties
-    )
-    
-    try {
-        Invoke-ArcGISWebRequest -Url("https://$($ServerHostName):6443/arcgis/admin/system/properties/update/") -HttpFormParameters @{ f = 'json'; token = $Token; properties = (ConvertTo-Json $Properties -Depth 4) } -Referer $Referer -TimeOutSec 180
-    }catch {
-        Write-Verbose "[WARNING] Request to Set-ServerSystemProperties returned error:- $_"
-    }
-}
-
-function Get-AdminSettings
-{
-    [CmdletBinding()]
-    Param
-    (
-        [System.String]
-        $ServerUrl,
-        
-        [System.String]
-        $SettingUrl,
-        
-        [System.String]
-        $Token, 
-
-        [System.String]
-		$Referer
-    )
-    $RequestParams = @{ f= 'json'; token = $Token; }
-    $RequestUrl  = $ServerUrl.TrimEnd("/") + "/" + $SettingUrl.TrimStart("/")
-    $Response = Invoke-ArcGISWebRequest -Url $RequestUrl -HttpFormParameters $RequestParams -Referer $Referer
-    Confirm-ResponseStatus $Response
-    $Response
-}
-
-function Set-AdminSettings
-{
-    [CmdletBinding()]
-    Param
-    (
-        [System.String]
-        $ServerUrl,
-
-        [System.String]
-        $SettingUrl,
-        
-        [System.String]
-        $Token,
-        
-        [System.String]
-        $Properties, 
-
-        [System.String]
-		$Referer
-    )
-    $RequestUrl  = $ServerUrl.TrimEnd("/") + "/" + $SettingUrl.TrimStart("/")
-    $COProperties = $Properties | ConvertFrom-Json
-    $RequestParams = @{ f= 'json'; token = $Token; }
-    $COProperties.psobject.properties | ForEach-Object { $RequestParams[$_.Name] = $_.Value }
-    $Response = Invoke-ArcGISWebRequest -Url $RequestUrl -HttpFormParameters $RequestParams -Referer $Referer 
-    Write-Verbose $Response
-    Confirm-ResponseStatus $Response
-    $Response
-}
-
-function Set-TokenSettings {
-    [CmdletBinding()]
-    Param (
-        [System.String]
-        $ServerUrl,
-
-        [System.String]
-        $SettingUrl,
-        
-        [System.String]
-        $Token,
-        
-        [System.String]
-        $Properties, 
-
-        [System.String]
-		$Referer
-    )
-
-    $RequestUrl = $ServerUrl.TrimEnd("/") + "/" + $SettingUrl.TrimStart("/")
-    $RequestParams = @{ f = 'json'; token = $Token; tokenManagerConfig = $Properties }
-    $Response = Invoke-ArcGISWebRequest -Url $RequestUrl -HttpFormParameters $RequestParams -Referer $Referer
-    Confirm-ResponseStatus $Response
-    Write-Verbose $Response
-    $Response
-}
 
 Export-ModuleMember -Function *-TargetResource

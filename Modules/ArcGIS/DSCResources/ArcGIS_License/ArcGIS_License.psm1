@@ -25,7 +25,7 @@ Import-Module -Name (Join-Path -Path $modulePath `
     .PARAMETER AdditionalServerRole
         (Optional - Only valid for General Purpose Server) Additional Server Role for which the product is being Licensed
     .PARAMETER IsSingleUse
-        Boolean to tell if Pro or Desktop is using Single Use License.
+        Boolean to tell if Pro is using Single Use License.
     .PARAMETER Force
         Boolean to Force the product to be licensed again, even if already done.
 
@@ -42,8 +42,9 @@ function Get-TargetResource
 		$LicenseFilePath
 	)
 
-	$null 
+	@{} 
 }
+
 function Set-TargetResource
 {
 	[CmdletBinding()]
@@ -65,11 +66,11 @@ function Set-TargetResource
 		[System.String]
 		$Ensure,
 
-        [ValidateSet("Server","Portal","Desktop","Pro","LicenseManager","Monitor")]
+        [ValidateSet("Server","Portal","Pro","LicenseManager","Monitor")]
 		[System.String]
 		$Component,
 
-		[ValidateSet("ImageServer","GeoEvent","GeoAnalytics","GeneralPurposeServer","HostingServer","NotebookServer","MissionServer","WorkflowManagerServer","KnowledgeServer","VideoServer")]
+		[ValidateSet("ImageServer","GeoEvent","GeoAnalytics","GeneralPurposeServer","HostingServer","NotebookServer","MissionServer","WorkflowManagerServer","KnowledgeServer","VideoServer","RealityServer","DataPipelinesServer","GeoEnrichmentServer")]
 		[System.String]
         $ServerRole = 'GeneralPurposeServer',
 
@@ -91,25 +92,9 @@ function Set-TargetResource
     }
 
     if($Ensure -ieq 'Present') {
-        [string]$RealVersion = @()
-        if(-not($Version)){
-            try{
-                $ErrorActionPreference = "Stop"; #Make all errors terminating
-                $ComponentName = if($Component -ieq "LicenseManager"){ "License Manager" }elseif($Component -ieq "Server"){ if($ServerRole -ieq 'NotebookServer'){ "ArcGIS Notebook Server" }elseif($ServerRole -ieq 'MissionServer'){ "ArcGIS Mission Server" }elseif($ServerRole -ieq 'VideoServer'){ "ArcGIS Video Server" }else{ "ArcGIS Server" } } else{ $Component }
-                $RealVersion = (Get-ArcGISProductDetails -ProductName $ComponentName).Version
-            }catch{
-                throw "Couldn't Find The Product - $Component"            
-            }finally{
-                $ErrorActionPreference = "Continue"; #Reset the error action pref to default
-            }
-        }else{
-            $RealVersion = $Version
-        }
-        Write-Verbose "RealVersion of ArcGIS Software:- $RealVersion" 
-        $RealVersion = $RealVersion.Split('.')[0] + '.' + $RealVersion.Split('.')[1] 
-        $LicenseVersion = if($Component -ieq 'Pro' -or $Component -ieq 'LicenseManager'){ '10.6' }else{ $RealVersion }
+        $LicenseVersion = Get-LicenseVersion -Component $Component -ServerRole $ServerRole -Version $Version -Verbose
         Write-Verbose "Licensing from $LicenseFilePath" 
-        if(@('Desktop', 'Pro', 'LicenseManager') -icontains $Component) {
+        if(@('Pro', 'LicenseManager') -icontains $Component) {
             Write-Verbose "Version $LicenseVersion Component $Component" 
             Invoke-LicenseSoftware -Product $Component -LicenseFilePath $LicenseFilePath `
                         -Version $LicenseVersion -LicensePassword $LicensePassword -IsSingleUse $IsSingleUse -Verbose
@@ -146,11 +131,11 @@ function Test-TargetResource
 		[System.String]
 		$Ensure,
 
-		[ValidateSet("Server","Portal","Desktop","Pro","LicenseManager","Monitor")]
+		[ValidateSet("Server","Portal","Pro","LicenseManager","Monitor")]
 		[System.String]
 		$Component,
 
-		[ValidateSet("ImageServer","GeoEvent","GeoAnalytics","GeneralPurposeServer","HostingServer","NotebookServer","MissionServer","WorkflowManagerServer","KnowledgeServer","VideoServer")]
+		[ValidateSet("ImageServer","GeoEvent","GeoAnalytics","GeneralPurposeServer","HostingServer","NotebookServer","MissionServer","WorkflowManagerServer","KnowledgeServer","VideoServer","RealityServer","DataPipelinesServer","GeoEnrichmentServer")]
 		[System.String]
         $ServerRole = 'GeneralPurposeServer',
 
@@ -166,31 +151,11 @@ function Test-TargetResource
         [System.Boolean]
 		$Force = $False
 	)
-
-    [string]$RealVersion = @()
+    
     $result = $false
-    if(-not($Version)){
-        try{
-            $ErrorActionPreference = "Stop"; #Make all errors terminating
-            $ComponentName = if($Component -ieq "LicenseManager"){ "License Manager" }elseif($Component -ieq "Server"){ if($ServerRole -ieq 'NotebookServer'){ "ArcGIS Notebook Server" }elseif($ServerRole -ieq 'MissionServer'){ "ArcGIS Mission Server" }elseif($ServerRole -ieq 'VideoServer'){ "ArcGIS Video Server" }else{ "ArcGIS Server" } } else{ $Component }
-            $RealVersion = (Get-ArcGISProductDetails -ProductName $ComponentName).Version
-        }catch{
-            throw "Couldn't Find The Product - $Component"        
-        }finally{
-            $ErrorActionPreference = "Continue"; #Reset the error action pref to default
-        }
-    }else{
-        $RealVersion = $Version
-    }
-
-    Write-Verbose "RealVersion of ArcGIS Software to be Licensed:- $RealVersion" 
-    $RealVersion = $RealVersion.Split('.')[0] + '.' + $RealVersion.Split('.')[1] 
-    $LicenseVersion = if($Component -ieq 'Pro' -or $Component -ieq 'LicenseManager'){ '10.6' }else{ $RealVersion }
-    Write-Verbose "Version $LicenseVersion" 
-    if($Component -ieq 'Desktop') {
-        Write-Verbose "TODO:- Check for Desktop license. For now forcing Software Authorization Tool to License Pro."
-    }
-    elseif($Component -ieq 'Pro') {
+    $LicenseVersion = Get-LicenseVersion -Component $Component -ServerRole $ServerRole -Version $Version -Verbose
+    
+    if($Component -ieq 'Pro') {
         Write-Verbose "TODO:- Check for Pro license. For now forcing Software Authorization Tool to License Pro."
     }
     elseif($Component -ieq 'LicenseManager') {
@@ -227,6 +192,48 @@ function Test-TargetResource
     }
 }
 
+function Get-LicenseVersion{
+    [CmdletBinding()]
+    param
+    (
+        [System.String]
+        $Component,
+
+        [System.String]
+        $ServerRole,
+
+        [System.String]
+		$Version
+    )
+
+    [string]$RealVersion = @()
+    if(-not($Version)){
+        try{
+            $ErrorActionPreference = "Stop"; #Make all errors terminating
+            $ComponentName = Get-ArcGISProductName -Name $Component -Version $Version
+            if($Component -ieq "Server"){
+                if(@("NotebookServer","MissionServer","VideoServer","DataPipelinesServer","GeoEnrichmentServer") -icontains $ServerRole){
+                    $ComponentName = Get-ArcGISProductName -Name $ServerRole -Version $Version
+                }
+            }
+
+            $RealVersion = (Get-ArcGISProductDetails -ProductName $ComponentName).Version
+        }catch{
+            throw "Couldn't find the product - $Component"            
+        }finally{
+            $ErrorActionPreference = "Continue"; #Reset the error action pref to default
+        }
+    }else{
+        $RealVersion = $Version
+    }
+    Write-Verbose "RealVersion of ArcGIS Software:- $RealVersion" 
+    $RealVersionString = "$(([version]$RealVersion).Major).$(([version]$RealVersion).Minor)"
+    $LicenseVersion = if($Component -ieq 'Pro' -or $Component -ieq 'LicenseManager'){ '10.6' }else{ $RealVersionString }
+    Write-Verbose "Version $LicenseVersion" 
+    return $LicenseVersion
+}
+
+
 function Invoke-LicenseSoftware
 {
     [CmdletBinding()]
@@ -253,12 +260,10 @@ function Invoke-LicenseSoftware
 
     $SoftwareAuthExePath = "$env:SystemDrive\Program Files\Common Files\ArcGIS\bin\SoftwareAuthorization.exe"
     $LMReloadUtilityPath = ""
-    if(@('Desktop','Pro','LicenseManager') -icontains $Product) {
+    if(@('Pro','LicenseManager') -icontains $Product) {
         $SoftwareAuthExePath = "$env:SystemDrive\Program Files (x86)\Common Files\ArcGIS\bin\SoftwareAuthorization.exe"
         if($IsSingleUse -or ($Product -ne 'LicenseManager')){
-            if($Product -ieq 'Desktop'){
-                $SoftwareAuthExePath = "$env:SystemDrive\Program Files (x86)\Common Files\ArcGIS\bin\softwareauthorization.exe"
-            }elseif($Product -ieq 'Pro'){
+            if($Product -ieq 'Pro'){
                 $InstallLocation = (Get-ArcGISProductDetails -ProductName "ArcGIS Pro" | Where-Object {$_.Name -ieq "ArcGIS Pro"}).InstallLocation
                 $SoftwareAuthExePath = "$($InstallLocation)bin\SoftwareAuthorizationPro.exe"
             }
@@ -270,7 +275,6 @@ function Invoke-LicenseSoftware
             }
         }
     }else{
-        $VersionArray = $Version.Split('.')
         if($Product -ieq "Server"){
             $ServerTypeName = "ArcGIS Server"
             if($ServerRole -ieq "NotebookServer"){ 
@@ -279,12 +283,19 @@ function Invoke-LicenseSoftware
                 $ServerTypeName = "ArcGIS Mission Server"
             }elseif($ServerRole -ieq "VideoServer"){ 
                 $ServerTypeName = "ArcGIS Video Server"
+            }elseif($ServerRole -ieq "DataPipelinesServer"){ 
+                $ServerTypeName = "ArcGIS Data Pipelines Server"
+            }elseif($ServerRole -ieq "GeoEnrichmentServer"){ 
+                $ServerTypeName = "GeoEnrichmentServer"
             }
+
+            Write-Verbose "Server product name - $ServerTypeName"
+
             $InstallLocation = (Get-ArcGISProductDetails -ProductName $ServerTypeName).InstallLocation
-            if($VersionArray[0] -gt 11 -or ($VersionArray[0] -eq 11 -and $VersionArray[1] -ge 2)){
+            if([version]$Version -ge "11.2"){
                 $SoftwareAuthExePath = "$($InstallLocation)tools\SoftwareAuthorization\SoftwareAuthorization.exe"
             }else{
-                if(($ServerRole -ieq "NotebookServer" -or $ServerRole -ieq "MissionServer" -or $ServerRole -ieq "VideoServer") -and ($VersionArray[0] -eq 11 -or ($VersionArray[0] -eq 10 -and $VersionArray[1] -ge 8))){
+                if(($ServerRole -ieq "NotebookServer" -or $ServerRole -ieq "MissionServer" -or $ServerRole -ieq "VideoServer" -or $ServerRole -ieq "DataPipelinesServer")){
                     if($ServerRole -ieq "MissionServer"){
                         $SoftwareAuthExePath = "$($InstallLocation)bin\SoftwareAuthorization.exe"
                     }else{
@@ -297,10 +308,12 @@ function Invoke-LicenseSoftware
     Write-Verbose "Licensing Product [$Product] using Software Authorization Utility at $SoftwareAuthExePath" -Verbose
     
     $Params = '-s -ver {0} -lif "{1}"' -f $Version,$licenseFilePath
+    $RedactedArguments = '-s -ver {0} -lif "{1}"' -f $Version,$licenseFilePath
     if($null -ne $LicensePassword){
         $Params = '-s -ver {0} -lif "{1}" -password {2}' -f $Version,$licenseFilePath,$LicensePassword.GetNetworkCredential().Password
+        $RedactedArguments = '-s -ver {0} -lif "{1}" -password {2}' -f $Version,$licenseFilePath,"xxxxx"
     }
-    Write-Verbose "[Running Command] $SoftwareAuthExePath $Params" -Verbose
+    Write-Verbose "[Running Command] $SoftwareAuthExePath $RedactedArguments" -Verbose
     
     [bool]$Done = $false
     [int]$AttemptNumber = 1
@@ -309,17 +322,9 @@ function Invoke-LicenseSoftware
         if(-not(Test-Path $SoftwareAuthExePath -PathType Leaf)){
             throw "$SoftwareAuthExePath not found"
         }
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $SoftwareAuthExePath
-        $psi.Arguments = $Params
-        $psi.UseShellExecute = $false #start the process from it's own executable file    
-        $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-        $psi.RedirectStandardError = $true #enable the process to read from standard error
-    
-        $p = [System.Diagnostics.Process]::Start($psi)
-        $p.WaitForExit()
-        $op = $p.StandardOutput.ReadToEnd()
-        if($p.ExitCode -eq 0) {
+
+        try{
+            $op = Invoke-StartProcess -ExecPath $SoftwareAuthExePath -Arguments $Params -Verbose
             if($op -and (($op.IndexOf('Error') -gt -1) -or ($op.IndexOf('(null)') -gt -1))) {
                 $err = "[ERROR] - Attempt $AttemptNumber - Licensing for Product [$Product] failed. Software Authorization Utility returned $op"
                 Write-Verbose $err
@@ -328,19 +333,16 @@ function Invoke-LicenseSoftware
                 $Done = $True
                 $err = $null
             }
-        }else{
-            $err = $p.StandardError.ReadToEnd()
-            Write-Verbose $err
-            if($err -and $err.Length -gt 0) {
-                throw  "[ERROR] - Attempt $AttemptNumber - Licensing for Product [$Product] failed. Software Authorization Utility returned Output - $op. Error - $err"
-            }
+        }catch{
+            throw  "[ERROR] - Attempt $AttemptNumber - Licensing for Product [$Product] failed. Software Authorization Utility error - $_"
         }
+
         $AttemptNumber += 1
     }
     if($null -ne $err){
         throw $err
     }
-    if($Product -ieq 'Desktop' -or $Product -ieq 'Pro') {
+    if($Product -ieq 'Pro') {
         Write-Verbose "Sleeping for 2 Minutes to finish Licensing"
         Start-Sleep -Seconds 120
     }
@@ -349,24 +351,11 @@ function Invoke-LicenseSoftware
         if(-not(Test-Path $LMReloadUtilityPath -PathType Leaf)){
             throw "$LMReloadUtilityPath not found"
         }
-        $psilm = New-Object System.Diagnostics.ProcessStartInfo
-        $psilm.FileName = $LMReloadUtilityPath
-        $psilm.Arguments = 'lmreread -c @localhost'
-        $psilm.UseShellExecute = $false #start the process from it's own executable file    
-        $psilm.RedirectStandardOutput = $true #enable the process to read from standard output
-        $psilm.RedirectStandardError = $true #enable the process to read from standard error
-        
-        $plm = [System.Diagnostics.Process]::Start($psilm)
-        $plm.WaitForExit()
-        $oplm = $p.StandardOutput.ReadToEnd()
-        if($p.ExitCode -eq 0) {
+        try{
+            $oplm = Invoke-StartProcess -ExecPath $LMReloadUtilityPath -Arguments 'lmreread -c @localhost' -Verbose
             Write-Verbose "License Manager tool operation successful - $oplm"
-        }else{
-            $errlm = $plm.StandardError.ReadToEnd()
-            Write-Verbose $errlm
-            if($errlm -and $errlm.Length -gt 0) {
-                throw "License Manager tool failed to re-read licenses. Output - $oplm. Error - $errlm"
-            }
+        }catch{
+            throw "License Manager tool failed to re-read licenses. $_"
         }
 	}
     Write-Verbose "Finished Licensing Product [$Product]" -Verbose
@@ -401,7 +390,7 @@ function Test-LicenseForRole{
         }
         elseif($Component -ieq 'Server'){
             Write-Verbose "ServerRole:- $ServerRole"
-            $searchtexts = $searchtexts = @('svr')
+            $searchtexts = @('svr', 'svradv')
             if($ServerRole -ieq 'ImageServer') {
                 $searchtexts = @('imgsvr')
             }
@@ -425,6 +414,15 @@ function Test-LicenseForRole{
             }
             if($ServerRole -ieq 'VideoServer') {
                 $searchtexts = @('videosvr')
+            }
+            if($ServerRole -ieq 'RealityServer') {
+                $searchtexts = @('realitysvr')
+            }
+            if($ServerRole -ieq 'DataPipelinesServer') {
+                $searchtexts = @('datapipelinesvr')
+            }
+            if($ServerRole -ieq 'GeoEnrichmentServer') {
+                $searchtexts = @('businesssvr') # TODO - Check for "svradv"
             }
         }
         

@@ -5,6 +5,10 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.DataStore.psm1'))
+
 function Get-TargetResource
 {
 	[CmdletBinding()]
@@ -37,8 +41,7 @@ function Get-TargetResource
         $CertificatePassword
 	)
 
-
-	$null 
+	@{}
 }
 
 function Set-TargetResource
@@ -76,26 +79,24 @@ function Set-TargetResource
     
     $MachineFQDN = if($DatastoreMachineHostName){ Get-FQDN $DatastoreMachineHostName }else{ Get-FQDN $env:COMPUTERNAME }
 
-    $ServiceName = Get-ArcGISServiceName -ComponentName 'DataStore'
-    $RegKey = Get-EsriRegistryKeyForService -ServiceName $ServiceName
-    $DataStoreInstallDirectory = (Get-ItemProperty -Path $RegKey -ErrorAction Ignore).InstallDir.TrimEnd('\')  
+    $DataStoreInstallDirectory = (Get-ArcGISComponentVersionAndInstallDirectory -ComponentName 'DataStore').InstallDir
 
-    Wait-ForUrl -Url "https://$($MachineFQDN):2443/arcgis/datastoreadmin/configure?f=json" -MaxWaitTimeInSeconds 180 -SleepTimeInSeconds 5 -HttpMethod 'GET' -Verbose
+    Test-ArcGISComponentHealth -BaseURL "https://$($MachineFQDN):2443/arcgis" -ComponentName "DataStore" -MaxWaitTimeInSeconds 180 -SleepTimeInSeconds 5 -Verbose
 
-    $VersionArray = $Version.Split('.')
+
     if($CertificateType -ieq 'WebServer'){
         $CertificateTest = Test-DataStoreCertificate -CertificateFileLocation $CertificateFileLocation `
                                                 -CertificatePassword $CertificatePassword `
                                                 -MachineFQDN $MachineFQDN -Verbose
         if(-not($CertificateTest)){
             Write-Verbose "Thumbprint of certificate configured with datastore doesn't matches the certificate provided. Updating it."
-            if($VersionArray[0] -eq 10 -or ($VersionArray[0] -eq 11 -and $VersionArray[1] -lt 3)){
-                Invoke-DataStoreUpdateSSLCertificateTool -DataStoreInstallDirectory $DataStoreInstallDirectory `
-                                                    -CertificateFileLocation $CertificateFileLocation `
-                                                    -CertificatePassword $CertificatePassword -CName $CName -Verbose
-            }else{
+            if([version]$Version -ge "11.3"){
                 Invoke-DataStoreReplaceSSLCertificateTool -DataStoreInstallDirectory $DataStoreInstallDirectory `
                                                     -CertificateFileLocation $CertificateFileLocation -CertificateType "webserver" `
+                                                    -CertificatePassword $CertificatePassword -CName $CName -Verbose
+            }else{
+                Invoke-DataStoreUpdateSSLCertificateTool -DataStoreInstallDirectory $DataStoreInstallDirectory `
+                                                    -CertificateFileLocation $CertificateFileLocation `
                                                     -CertificatePassword $CertificatePassword -CName $CName -Verbose
             }
             Write-Verbose "Certificate update successful."
@@ -103,7 +104,7 @@ function Set-TargetResource
             Write-Verbose "Thumbprint of certificate configured with datastore matches the certificate provided"
         }
     }else{
-        if($VersionArray[0] -gt 11 -or ($VersionArray[0] -eq 11 -and $VersionArray[1] -gt 2)){
+        if([version]$Version -ge "11.3"){
             Write-Verbose "Updating Certificate of type $CertificateType which is supported for ArcGIS Data Store version $Version"
             $CertType = $CertificateType.ToLower()
             if($CertificateType -ieq 'GraphStore'){
@@ -158,8 +159,8 @@ function Test-TargetResource
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 
     $MachineFQDN = if($DatastoreMachineHostName){ Get-FQDN $DatastoreMachineHostName }else{ Get-FQDN $env:COMPUTERNAME }
-    Wait-ForUrl -Url "https://$($MachineFQDN):2443/arcgis/datastoreadmin/configure?f=json" -MaxWaitTimeInSeconds 180 -SleepTimeInSeconds 5 -HttpMethod 'GET' -Verbose
-    
+    Test-ArcGISComponentHealth -BaseURL "https://$($MachineFQDN):2443/arcgis" -ComponentName "DataStore" -MaxWaitTimeInSeconds 180 -SleepTimeInSeconds 5 -Verbose
+
     if($CertificateType -ieq 'WebServer'){
         $result = $true
         $CertificateTest = Test-DataStoreCertificate -CertificateFileLocation $CertificateFileLocation `
@@ -172,11 +173,10 @@ function Test-TargetResource
             Write-Verbose "Thumbprint of certificate configured with datastore matches the certificate provided"
         }
     }else{
-        $VersionArray = $Version.Split('.')
-        if($VersionArray[0] -eq 10 -or ($VersionArray[0] -eq 11 -and $VersionArray[1] -lt 3)){
-            throw "Updating Certificate of type $CertificateType is not supported for ArcGIS Data Store version $Version"
-        }else{
+        if([version]$Version -ge "11.3"){
             Write-Verbose "Skipping validation for Certificate of type $CertificateType which is supported for ArcGIS Data Store version $Version"
+        }else{
+            throw "Updating certificate of type $CertificateType is not supported for ArcGIS Data Store version $Version"
         }
         $result = $false
     }
@@ -233,30 +233,8 @@ function Invoke-DataStoreUpdateSSLCertificateTool
     }
     $RandomString = -join((65..90) + (97..122) | Get-Random -Count 5 | % {[char]$_})
     $CertAlias = "$($RandomString)$($CName)"
-
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $UpdateDataStoreSSLCertificateToolPath
-    $psi.Arguments = "`"$($CertificateFileLocation)`" `"$($CertificatePassword.GetNetworkCredential().Password)`" $CertAlias --prompt no"
-    $psi.UseShellExecute = $false #start the process from it's own executable file    
-    $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-    $psi.RedirectStandardError = $true #enable the process to read from standard error
-    $psi.EnvironmentVariables["AGSDATASTORE"] = [environment]::GetEnvironmentVariable("AGSDATASTORE","Machine")
-
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $p.WaitForExit()
-    $result = $null
-    $op = $p.StandardOutput.ReadToEnd()
-    if($p.ExitCode -eq 0) {
-        Write-Verbose "Update successful - $op"
-        $result = $op
-    }else{
-        $err = $p.StandardError.ReadToEnd()
-        Write-Verbose $err
-        if($err -and $err.Length -gt 0) {
-            throw "ArcGIS Data Store 'updatesslcertificate.bat' tool failed. Output - $op. Error - $err"
-        }
-    }
-    $result
+    $Arguments = "`"$($CertificateFileLocation)`" `"$($CertificatePassword.GetNetworkCredential().Password)`" $CertAlias --prompt no"
+    Invoke-StartProcess -ExecPath $UpdateDataStoreSSLCertificateToolPath -Arguments $Arguments -EnvVariables @{ "AGSDATASTORE" = $null } -Verbose
 }
 
 function Invoke-DataStoreReplaceSSLCertificateTool
@@ -287,29 +265,8 @@ function Invoke-DataStoreReplaceSSLCertificateTool
     $RandomString = -join((65..90) + (97..122) | Get-Random -Count 5 | % {[char]$_})
     $CertAlias = "$($RandomString)$($CName)"
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $DataStoreReplaceSSLCertificateToolPath
-    $psi.Arguments = "`"$($CertificateFileLocation)`" `"$($CertificatePassword.GetNetworkCredential().Password)`" $CertAlias --option $CertificateType --prompt no"
-    $psi.UseShellExecute = $false #start the process from it's own executable file    
-    $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-    $psi.RedirectStandardError = $true #enable the process to read from standard error
-    $psi.EnvironmentVariables["AGSDATASTORE"] = [environment]::GetEnvironmentVariable("AGSDATASTORE","Machine")
-
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $p.WaitForExit()
-    $result = $null
-    $op = $p.StandardOutput.ReadToEnd()
-    if($p.ExitCode -eq 0) {
-        Write-Verbose "Update successful - $op"
-        $result = $op
-    }else{
-        $err = $p.StandardError.ReadToEnd()
-        Write-Verbose $err
-        if($err -and $err.Length -gt 0) {
-            throw "ArcGIS Data Store 'replacesslcertificate.bat' tool failed. Output - $op. Error - $err"
-        }
-    }
-    $result
+    $Arguments = "`"$($CertificateFileLocation)`" `"$($CertificatePassword.GetNetworkCredential().Password)`" $CertAlias --option $CertificateType --prompt no"
+    Invoke-StartProcess -ExecPath $DataStoreReplaceSSLCertificateToolPath -Arguments $Arguments -EnvVariables @{ "AGSDATASTORE" = $null } -Verbose
 }
 
 Export-ModuleMember -Function *-TargetResource

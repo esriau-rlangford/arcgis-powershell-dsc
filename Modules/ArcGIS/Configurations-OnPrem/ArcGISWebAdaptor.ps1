@@ -38,7 +38,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_xFirewall, ArcGIS_IIS_TLS, ArcGIS_WebAdaptor
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_xFirewall, ArcGIS_IIS_TLS, ArcGIS_WebAdaptor
 
 
     Node $AllNodes.NodeName
@@ -111,12 +111,12 @@
         foreach($WA in $Node.WebAdaptorConfig){
             if($WA.Role -ieq "Server" -and $PrimaryServerMachine){
                 # AdminAccessEnabled flag is not honored from version 11.5 onwards. Defaulting it to True
-                $WAAdminAccessEnabled = if((@("11.5","12.0") -icontains $Version)) {$true} elseif(@("MissionServer", "NotebookServer", "VideoServer") -iContains  $ServerRole) {$true} else {$WA.AdminAccessEnabled}
+                $WAAdminAccessEnabled = if([version]$Version -ge "11.5") {$true} elseif(@("MissionServer", "NotebookServer", "VideoServer","DataPipelinesServer") -iContains  $ServerRole) {$true} else {$WA.AdminAccessEnabled}
                 ArcGIS_WebAdaptor "ConfigureServerWebAdaptor$($Node.NodeName)-$($WA.Context)"
                 {
                     Version             = $Version
                     Ensure              = "Present"
-                    Component           = if($ServerRole -ieq "NotebookServer"){ 'NotebookServer' }elseif($ServerRole -ieq "MissionServer"){ 'MissionServer' }elseif($ServerRole -ieq "VideoServer"){ 'VideoServer' }else{ 'Server' }
+                    Component           = if($ServerRole -ieq "NotebookServer"){ 'NotebookServer' }elseif($ServerRole -ieq "MissionServer"){ 'MissionServer' }elseif($ServerRole -ieq "VideoServer"){ 'VideoServer' }elseif($ServerRole -ieq "DataPipelinesServer"){ 'DataPipelinesServer' }else{ 'Server' }
                     HostName            = if($WA.HostName){ $WA.HostName }elseif($Node.SSLCertificate){ $Node.SSLCertificate.CName }else{ $MachineFQDN } 
                     ComponentHostName   = (Get-FQDN $PrimaryServerMachine)
                     Context             = $WA.Context

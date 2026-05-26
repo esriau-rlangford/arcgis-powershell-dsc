@@ -5,6 +5,15 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.DataStore.psm1'))
+
+
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
+
 <#
     .SYNOPSIS
         Supports configuration changes and Updates for the Datastore configured with the Server
@@ -39,7 +48,7 @@ function Get-TargetResource
 		$InstallDir
     )
 
-    $null
+    @{}
 }
 
 function Set-TargetResource
@@ -64,19 +73,19 @@ function Set-TargetResource
     
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 
-    $ServerUrl = "https://$($ServerHostName):6443"   
-    $Referer = $ServerUrl
-
-    Wait-ForUrl -Url "$($ServerUrl)/arcgis/admin" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5
+    $ServerFQDN = Get-FQDN $ServerHostName
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $ServerFQDN
+    $Referer = $ServerBaseUrl
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5 -Verbose
 
     $Done = $false
     $NumAttempts = 0
     while(-not($Done) -and ($NumAttempts -lt 3)) {
         try {
-            $token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer 
+            $token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer 
         }
         catch {
-            Write-Verbose "[WARNING]:- Server at $ServerUrl did not return a token on attempt $($NumAttempts + 1). Retry after 15 seconds"
+            Write-Verbose "[WARNING]:- Server at $ServerBaseUrl did not return a token on attempt $($NumAttempts + 1). Retry after 15 seconds"
         }
         if($token) {
             Write-Verbose "Retrieved server token successfully"
@@ -92,55 +101,38 @@ function Set-TargetResource
     $datastoreConfigHashtable = Convert-PSObjectToHashtable $datastoreConfigJSONObject 
 
     #Hit the server endpoint to get the replication role
-    $DSInfoResponse = Get-DataStoreInfo -DataStoreAdminEndpoint "https://localhost:2443/arcgis/datastoreadmin" -ServerSiteAdminCredential $SiteAdministrator `
-                                -ServerSiteUrl "https://$($ServerHostName):6443/arcgis" -Referer $Referer
+    $DatastoreBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "DataStore"
+    $DSInfoResponse = Get-DataStoreInfo -URL $DatastoreBaseUrl `
+                                -ServerSiteAdminCredential $SiteAdministrator `
+                                -ServerSiteUrl $ServerBaseUrl -Referer $Referer
     if($DSInfoResponse.error) {
-        Write-Verbose "Error Response - $($response.error | ConvertTo-Json)"
-        throw [string]::Format("ERROR: failed. {0}" , $response.error.message)
+        Write-Verbose "Error Response - $($DSInfoResponse.error | ConvertTo-Json)"
+        throw [string]::Format("ERROR: failed. {0}" , $DSInfoResponse.error.message)
     }
     
-    $VersionArray = $DSInfoResponse.currentVersion.split('.')                                                               
+    $Version = $DSInfoResponse.currentVersion
     $dstypesarray = [System.Collections.ArrayList]@()
     
     if($DSInfoResponse.relational.registered) {
-        if($VersionArray[0] -gt 10 -or (($VersionArray[0] -eq 10 -and $VersionArray[1] -gt 8) -or $DSInfoResponse.currentVersion -ieq "10.8.1" )){
-            $datastoreConfigFilePath = "$ContentDirectory\\etc\\relational-config.json"
-            $datastoreConfigJSONObject = (ConvertFrom-Json (Get-Content $datastoreConfigFilePath -Raw))
-            $datastoreConfigHashtable = Convert-PSObjectToHashtable $datastoreConfigJSONObject 
-            Write-Verbose "Relational Replication Role - $($datastoreConfigHashtable["replication.role"])"
-            if($datastoreConfigHashtable["replication.role"] -ieq "PRIMARY"){
-                $dstypesarray.Add('relational')
-            }
-        }else{
-            Write-Verbose "Relational Replication Role - $($datastoreConfigHashtable["store.relational"]["replication.role"])"
-            if($datastoreConfigHashtable["store.relational"]["replication.role"] -ieq "PRIMARY"){
-                $dstypesarray.Add('relational')
-            }
+        $datastoreConfigFilePath = "$ContentDirectory\\etc\\relational-config.json"
+        $datastoreConfigJSONObject = (ConvertFrom-Json (Get-Content $datastoreConfigFilePath -Raw))
+        $datastoreConfigHashtable = Convert-PSObjectToHashtable $datastoreConfigJSONObject 
+        Write-Verbose "Relational Replication Role - $($datastoreConfigHashtable["replication.role"])"
+        if($datastoreConfigHashtable["replication.role"] -ieq "PRIMARY"){
+            $dstypesarray.Add('relational')
         }
     }
+
     if($DSInfoResponse.tileCache.registered) {
-        if($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -and $VersionArray[1] -gt 7)){
-            if($VersionArray[0] -eq 10 -and $VersionArray[1] -eq 8 -and $VersionArray[2] -eq 0){
-                Write-Verbose "TileCache Replication Role - $($datastoreConfigHashtable["store.tilecache"]["replication.role"])"
-                if($datastoreConfigHashtable["store.tilecache"]["replication.role"] -ieq "PRIMARY" -or $datastoreConfigHashtable["replication.role"] -ieq "CLUSTER_MEMBER"){
-                    $dstypesarray.Add('tilecache')
-                }
-            }else{
-                $datastoreConfigFilePath = "$ContentDirectory\\etc\\tilecache-config.json"
-                $datastoreConfigJSONObject = (ConvertFrom-Json (Get-Content $datastoreConfigFilePath -Raw))
-                $datastoreConfigHashtable = Convert-PSObjectToHashtable $datastoreConfigJSONObject 
-                Write-Verbose "TileCache Replication Role - $($datastoreConfigHashtable["replication.role"])"
-                if($datastoreConfigHashtable["replication.role"] -ieq "PRIMARY" -or $datastoreConfigHashtable["replication.role"] -ieq "CLUSTER_MEMBER"){
-                    $dstypesarray.Add('tilecache')
-                }
-            }
-        }else{
-            Write-Verbose "TileCache Replication Role - $($datastoreConfigHashtable["store.tilecache"]["replication.role"])"
-            if($datastoreConfigHashtable["store.tilecache"]["replication.role"] -ieq "PRIMARY" ){
-                $dstypesarray.Add('tilecache')
-            }
+        $datastoreConfigFilePath = "$ContentDirectory\\etc\\tilecache-config.json"
+        $datastoreConfigJSONObject = (ConvertFrom-Json (Get-Content $datastoreConfigFilePath -Raw))
+        $datastoreConfigHashtable = Convert-PSObjectToHashtable $datastoreConfigJSONObject 
+        Write-Verbose "TileCache Replication Role - $($datastoreConfigHashtable["replication.role"])"
+        if($datastoreConfigHashtable["replication.role"] -ieq "PRIMARY" -or $datastoreConfigHashtable["replication.role"] -ieq "CLUSTER_MEMBER"){
+            $dstypesarray.Add('tilecache')
         }
     }
+    
     if($DSInfoResponse.spatioTemporal.registered) {
         $dstypesarray.Add('spatiotemporal')
     }
@@ -148,44 +140,27 @@ function Set-TargetResource
         $dstypesarray.Add('graph')
     }
     if($DSInfoResponse.objectStore.registered) {
-        $dstypesarray.Add('object')
+        if(-not($DSInfoResponse.objectStore.isCloudObjectStore)){
+            $dstypesarray.Add('object')
+        }
     }
 
     if($dstypesarray.Length -gt 0){
         $dstypes = $dstypesarray -join ","
         Write-Verbose $dstypes
-        $ServerAdminUrl = "$($ServerUrl)/arcgis"
         $ExecPath = Join-Path $InstallDir 'tools\configuredatastore.bat'
-        $Arguments = "$($ServerAdminUrl) $($SiteAdministrator.GetNetworkCredential().UserName) `"$($SiteAdministrator.GetNetworkCredential().Password)`" $($ContentDirectory) --stores $dstypes"
-        $RedactedArguments = "$($ServerAdminUrl) $($SiteAdministrator.GetNetworkCredential().UserName) `"xxxxx`" $($ContentDirectory) --stores $dstypes"
+        $Arguments = "$($ServerBaseUrl) $($SiteAdministrator.GetNetworkCredential().UserName) `"$($SiteAdministrator.GetNetworkCredential().Password)`" $($ContentDirectory) --stores $dstypes"
+        $RedactedArguments = "$($ServerBaseUrl) $($SiteAdministrator.GetNetworkCredential().UserName) `"xxxxx`" $($ContentDirectory) --stores $dstypes"
         Write-verbose "Executing $ExecPath $RedactedArguments"
 
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $ExecPath
-        $psi.Arguments = $Arguments
-        $psi.UseShellExecute = $false #start the process from it's own executable file    
-        $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-        $psi.RedirectStandardError = $true #enable the process to read from standard error
-        $psi.EnvironmentVariables["AGSDATASTORE"] = [environment]::GetEnvironmentVariable("AGSDATASTORE","Machine")
-        $p = [System.Diagnostics.Process]::Start($psi)
-        $p.WaitForExit()
-        $op = $p.StandardOutput.ReadToEnd()
-        if($op -and $op.Length -gt 0) {
-            Write-Verbose "Output:- $op"
-        }
-        $err = $p.StandardError.ReadToEnd()
-        if($p.ExitCode -eq 0) {                    
+        try{
+            Invoke-StartProcess -ExecPath $ExecPath -Arguments $Arguments -EnvVariables @{ "AGSDATASTORE" = $null } -Verbose
             Write-Verbose "Upgraded correctly"
-        }else {
-            Write-Verbose "Datastore upgrade did not succeed. Process exit code:- $($p.ExitCode)"
-            if($err -and $err.Length -gt 0) {
-                Write-Verbose $err
-            }
-            throw "Datastore upgrade failed. Process exit code:- $($p.ExitCode). Error - $($err)"
+        }catch{
+            throw "Datastore upgrade failed. $($_)"
         }
     }
 }
-
 
 function Test-TargetResource
 {
@@ -214,16 +189,12 @@ function Test-TargetResource
     
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 
-    $ServerUrl = "https://$($ServerHostName):6443"   
-    $Referer = $ServerUrl
-    Wait-ForUrl -Url "$ServerUrl/arcgis/admin" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5
-    $result = $true
-    $info = Invoke-ArcGISWebRequest -Url "https://localhost:2443/arcgis/datastoreadmin/configure" -HttpFormParameters @{ f = 'json'}  -Referer $Referer -HttpMethod 'GET' -Verbose 
-
-    if($info.upgrading -and (($info.upgrading -ieq 'outplace') -or ($info.upgrading -ieq 'inplace'))){
-        Write-Verbose "Upgrade in progress - $($info.upgrading)"
-        $result = $false
-    }
+    $ServerFQDN = Get-FQDN $ServerHostName
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $ServerFQDN
+    $Referer = $ServerBaseUrl
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5 -Verbose
+    $DatastoreBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "DataStore"
+    $result = Test-DataStoreUpgrade -URL $DatastoreBaseUrl -Referer $Referer
 
     $result
 }

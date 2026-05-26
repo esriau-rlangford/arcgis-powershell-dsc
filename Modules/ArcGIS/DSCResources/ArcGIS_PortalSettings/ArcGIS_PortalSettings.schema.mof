@@ -3,6 +3,7 @@
 class ArcGIS_PortalSettings : OMI_BaseResource
 {
 	[Key] String PortalHostName;
+	[Key] String Version;
 	[Write, EmbeddedInstance("MSFT_Credential")] String PortalAdministrator;
 	[Write] String ExternalDNSName;
 	[Write] String PortalContext;

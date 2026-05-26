@@ -2,6 +2,7 @@
 [ClassVersion("1.0.0.0"), FriendlyName("ArcGIS_Portal_TLS")]
 class ArcGIS_Portal_TLS : OMI_BaseResource
 {
+	[Key] String Version;
 	[Key] String PortalHostName;
 	[Write, EmbeddedInstance("MSFT_Credential")] String SiteAdministrator;
 	[Write, Description("Location of the .pfx certificate file")] String CertificateFileLocation;

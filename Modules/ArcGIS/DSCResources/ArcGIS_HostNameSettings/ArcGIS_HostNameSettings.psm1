@@ -24,7 +24,7 @@ function Get-TargetResource
         $HostName
     )
     
-    $null
+    @{}
 }
 
 function Set-TargetResource
@@ -49,10 +49,7 @@ function Set-TargetResource
     $FQDN = if($HostName){ Get-FQDN $HostName }else{ Get-FQDN $env:COMPUTERNAME }
 
     Write-Verbose "Fully Qualified Domain Name :- $FQDN"
-    $ServiceName = Get-ArcGISServiceName -ComponentName $ComponentName
-    Write-Verbose "Service Name :- $ServiceName"
-    $RegKey = Get-EsriRegistryKeyForService -ServiceName $ServiceName
-    $InstallDir =(Get-ItemProperty -Path $RegKey -ErrorAction Ignore).InstallDir 
+    $InstallDir = (Get-ArcGISComponentVersionAndInstallDirectory -ComponentName $ComponentName).InstallDir
     $RestartRequired = $false
 
     if($ComponentName -ine "DataStore"){
@@ -63,7 +60,7 @@ function Set-TargetResource
             Write-Verbose "Configured hostname '$hostname' does not match expected value '$FQDN'. Setting it"
             if(Set-ConfiguredHostName -InstallDir $InstallDir -HostName $FQDN) { 
                 # Need to restart the service to pick up the hostname 
-                Write-Verbose "hostname.properties file was modified. Need to restart the '$ServiceName' service to pick up changes"
+                Write-Verbose "hostname.properties file was modified. Need to restart the '$ComponentName' service to pick up changes"
                 $RestartRequired = $true 
             }
         }
@@ -95,37 +92,19 @@ function Set-TargetResource
             Write-Verbose "In $($MessagePrefix)DataStore configured host identifier '$hostidentifier' does not match expected value '$FQDN' or host identifier type '$hostidentifierType' does not match expected value '$expectedHostIdentifierType'. Setting it"
             if(Set-ConfiguredHostIdentifier -InstallDir $InstallDir -HostIdentifier $FQDN -HostIdentifierType $expectedHostIdentifierType) { 
                 # Need to restart the service to pick up the hostidentifier 
-                Write-Verbose "In $($MessagePrefix)DataStore Hostidentifier.properties file was modified. Need to restart the '$ServiceName' service to pick up changes"
+                Write-Verbose "In $($MessagePrefix)DataStore Hostidentifier.properties file was modified. Need to restart the '$ComponentName' service to pick up changes"
                 $RestartRequired = $true 
             }
         }
     }
 
-    if($RestartRequired) {    
-        Restart-ArcGISService -ServiceName $ServiceName -Verbose
-        $HealthCheckUrl = Get-HealthCheckUrl -ComponentName $ComponentName -FQDN $FQDN
-        Write-Verbose "Waiting for $ComponentName to initialize. Health check url - '$HealthCheckUrl'"
-        Wait-ForUrl $HealthCheckUrl -HttpMethod 'GET' -MaxWaitTimeInSeconds 600 -Verbose
-    }
-}
-
-function Get-HealthCheckUrl {
-    param(
-        [System.String]
-        $ComponentName,
+    if($RestartRequired) {
+        Restart-ArcGISService -ComponentName $ComponentName -Verbose
         
-        [System.String]
-        $FQDN
-    )
-
-    switch ($ComponentName) {
-        'Portal' { return "https://$($FQDN):7443/arcgis/portaladmin/" }
-        'Server' { return "https://$($FQDN):6443/arcgis/admin/" }
-        'DataStore' { return "https://$($FQDN):2443/arcgis/datastore/" }
-        'MissionServer' { return "https://$($FQDN):20443/arcgis/admin/" }
-        'NotebookServer' { return "https://$($FQDN):11443/arcgis/admin/" }
-        'VideoServer' { return "https://$($FQDN):21443/arcgis/admin/" }
-        default { throw "Unknown component name: $ComponentName" }
+        $BaseURL = Get-ArcGISComponentBaseUrl -ComponentName $ComponentName -FQDN $FQDN
+        Write-Verbose "Waiting for $ComponentName to initialize. $($BaseURL)"
+        $Component = if($ComponentName -ieq "Portal"){ "PortalSharing" }else{ $ComponentName }
+        Test-ArcGISComponentHealth -BaseURL $BaseURL -ComponentName $Component -MaxWaitTimeInSeconds 600 -Verbose
     }
 }
 
@@ -153,10 +132,7 @@ function Test-TargetResource
     $result = $true
 
     Write-Verbose "Fully Qualified Domain Name :- $FQDN"
-    $ServiceName = Get-ArcGISServiceName -ComponentName $ComponentName
-    Write-Verbose "Service Name :- $ServiceName"
-    $RegKey = Get-EsriRegistryKeyForService -ServiceName $ServiceName
-    $InstallDir =(Get-ItemProperty -Path $RegKey -ErrorAction Ignore).InstallDir 
+    $InstallDir = (Get-ArcGISComponentVersionAndInstallDirectory -ComponentName $ComponentName).InstallDir
     $hostname = Get-ConfiguredHostName -InstallDir $InstallDir
     
     if ($hostname -ieq $FQDN) {
@@ -176,7 +152,6 @@ function Test-TargetResource
     }
 
     if ($result -and ($ComponentName -ieq "Portal" -or $ComponentName -ieq "DataStore")){
-        $InstallDir = Join-Path $InstallDir 'framework\runtime\ds' 
         $MessagePrefix = ""
         if($ComponentName -ieq "Portal"){
             $InstallDir = Join-Path $InstallDir 'framework\runtime\ds' 

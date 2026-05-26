@@ -3,7 +3,7 @@
 	param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0"
+        $Version = "12.1"
 
         ,[Parameter(Mandatory=$false)]
         [System.Boolean]
@@ -198,13 +198,14 @@
 	Import-DscResource -Name ArcGIS_Server
     Import-DscResource -Name ArcGIS_Server_TLS
     Import-DscResource -Name ArcGIS_Service_Account
-    Import-DscResource -name ArcGIS_WindowsService
     Import-DscResource -Name ArcGIS_xFirewall
     Import-DscResource -Name ArcGIS_Disk
     Import-DscResource -Name ArcGIS_LogHarvester
     Import-DscResource -Name ArcGIS_ServerSettings
-    Import-DscResource -Name ArcGIS_AzureSetupDownloadsFolderManager
+    Import-DscResource -Name ArcGIS_AzureSetupsManager
     Import-DscResource -Name ArcGIS_HostNameSettings
+    Import-DscResource -Name ArcGIS_RemoteFile
+    Import-DscResource -Name ArcGIS_WindowsService
     
     $FileShareRootPath = $FileSharePath
     if(-not($UseExistingFileShare)) { 
@@ -224,29 +225,8 @@
     }
     
     $ServerCertificateLocalFilePath = (Join-Path $LocalCertificatePath $ServerCertificateFileName)
-
     $HasValidServiceCredential = ($ServiceCredential -and ($ServiceCredential.GetNetworkCredential().Password -ine 'Placeholder'))
-
-    ##
-    ## Download license file and certificate files
-    ##
-    if($HasValidServiceCredential){
-        if($ServerLicenseFileName) {
-            $ServerLicenseFileUrl = "$($DeploymentArtifactCredentials.UserName)/$($ServerLicenseFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $ServerLicenseFileName -Uri $ServerLicenseFileUrl -UseBasicParsing -ErrorAction Ignore
-        }   
-        
-        if($PublicKeySSLCertificateFileName){
-            $PublicKeySSLCertificateFileUrl = "$($DeploymentArtifactCredentials.UserName)/$($PublicKeySSLCertificateFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $PublicKeySSLCertificateFileName -Uri $PublicKeySSLCertificateFileUrl -UseBasicParsing -ErrorAction Ignore
-        }
-
-        if($ServerCertificateFileName){
-            $ServerCertificateFileUrl = "$($DeploymentArtifactCredentials.UserName)/Certs/$($ServerCertificateFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $ServerCertificateLocalFilePath -Uri $ServerCertificateFileUrl -UseBasicParsing -ErrorAction Ignore
-        }
-    }
-    
+ 
     $ServerHostName = ($ServerMachineNames -split ',') | Select-Object -First 1    
     $Join = ($env:ComputerName -ine $ServerHostName)
     
@@ -289,7 +269,7 @@
             HostName = $env:ComputerName
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager CleanupDownloadsFolder{
+        ArcGIS_AzureSetupsManager CleanupDownloadsFolder{
             Version = $Version
             OperationType = 'CleanupDownloadsFolder'
             ComponentNames = if($IsAllInOneBaseDeploy){ "DataStore,Server,Portal" }else{ "Server" }
@@ -298,6 +278,43 @@
         if($HasValidServiceCredential) 
         {
             $ServerDependsOn = @()
+
+            if($ServerLicenseFileName) {
+                ArcGIS_RemoteFile "ServerLicenceFileDownload"
+                {
+                    Source = $ServerLicenseFileName
+                    Destination = (Join-Path $(Get-Location).Path $ServerLicenseFileName)
+                    FileSourceType = "AzureSASUri"
+                    Credential = $DeploymentArtifactCredentials
+                    Ensure = 'Present'
+                }
+                $ServerDependsOn += '[ArcGIS_RemoteFile]ServerLicenceFileDownload'
+            }
+
+            if($PublicKeySSLCertificateFileName) {
+                ArcGIS_RemoteFile "PublicKeySSLCertificateFileDownload"
+                {
+                    Source = $PublicKeySSLCertificateFileName
+                    Destination = (Join-Path $(Get-Location).Path $PublicKeySSLCertificateFileName)
+                    FileSourceType = "AzureSASUri"
+                    Credential = $DeploymentArtifactCredentials
+                    Ensure = 'Present'
+                }
+                $ServerDependsOn += '[ArcGIS_RemoteFile]PublicKeySSLCertificateFileDownload'
+            }
+
+            if($ServerCertificateFileName) {
+                ArcGIS_RemoteFile "ServerCertificateFileDownload"
+                {
+                    Source = "Certs/$($ServerCertificateFileName)"
+                    Destination = $ServerCertificateLocalFilePath
+                    FileSourceType = "AzureSASUri"
+                    Credential = $DeploymentArtifactCredentials
+                    Ensure = 'Present'
+                }
+                $ServerDependsOn += '[ArcGIS_RemoteFile]ServerCertificateFileDownload'
+            }
+
             if(-not($IsUpdatingCertificates))
             {
                 if(-Not($ServiceCredentialIsDomainAccount)){
@@ -320,6 +337,7 @@
                         LicenseFilePath = (Join-Path $(Get-Location).Path $ServerLicenseFileName)
                         Ensure          = 'Present'
                         Component       = 'Server'
+                        Version 		= $Version
                     } 
                     $ServerDependsOn += '[ArcGIS_License]ServerLicense'
 
@@ -494,9 +512,9 @@
             if($env:ComputerName -ieq $ServerHostName -and (-not($IsUpdatingCertificates) -and ($ServerLicenseFileName -and ($ServerLicenseFileName.Trim().Length -gt 0)))){ 
                 ArcGIS_ServerSettings ServerSettings
                 {
-                    ServerContext       = $ServerContext
+                    WebContextURL       = if($ExternalDNSHostName){"https://$($ExternalDNSHostName)/$($ServerContext)"}else{ $null }
+                    ServerType			= "Server"
                     ServerHostName      = $ServerHostName
-                    ExternalDNSName     = $ExternalDNSHostName
                     SiteAdministrator   = $SiteAdministratorCredential
                     DependsOn           = $ServerDependsOn
                 }
@@ -549,7 +567,7 @@
             $DataStoreItems = @()
             $CacheDirectories = @()
 
-            $CloudStoresObj = $()
+            $CloudStoresObj = @()
             if($CloudProvidedObjectStore -and $CloudProvidedObjectStore.Count -gt 0){
                 $CloudStoresObj += @($CloudProvidedObjectStore)
             }

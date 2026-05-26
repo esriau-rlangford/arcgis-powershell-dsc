@@ -5,6 +5,9 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
 <#
     .SYNOPSIS
         Makes a request to the installed Server to Register Existing External Cache Directories with existing Server Site
@@ -42,7 +45,7 @@ function Get-TargetResource
         $SiteAdministrator
 	)
 
-	$null
+	@{}
 }
 
 function Set-TargetResource
@@ -70,26 +73,28 @@ function Set-TargetResource
     $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
     Write-Verbose "Fully Qualified Domain Name :- $FQDN"
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
-	Write-Verbose "Waiting for Server 'https://$($FQDN):6443/arcgis/admin' to initialize"
-    Wait-ForUrl "https://$($FQDN):6443/arcgis/admin" -HttpMethod 'GET'
+
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+    $Referer = $ServerBaseUrl
+	Write-Verbose "Waiting for Server '$($ServerBaseUrl)' to initialize"
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server"
 
     if($Ensure -ieq 'Present') {        
-        $Referer = 'http://localhost' 
-        $ServerUrl = "https://$($FQDN):6443"
+        $Referer = 'https://localhost' 
         try {  
-            Write-Verbose "Getting the Token for site '$ServerUrl'"
-            $token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer 
+            Write-Verbose "Getting the Token for site '$ServerBaseUrl'"
+            $token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer 
             if($null -ne $token.token -and $DirectoriesJSON) { #setting registered directories
-                $responseDirectories = Get-RegisteredDirectories -ServerURL $ServerUrl -Token $token.token -Referer $Referer
-                ForEach ($dir in ($DirectoriesJSON | ConvertFrom-Json)) 
+                $responseDirectories = Get-SystemDirectories -URL $ServerBaseUrl -Token $token.token -Referer $Referer
+                foreach ($dir in ($DirectoriesJSON | ConvertFrom-Json)) 
                 {
                     Write-Verbose "Testing for Directory $($dir.name)"
                     if(($responseDirectories | Where-Object { ($responseDirectories.directories.name -icontains $($dir.name))}  | Measure-Object).Count -gt 0) {
                         Write-Verbose "Directory $($dir.name) already registered > no Action required"
                     } else {
                         Write-Verbose "Directory $($dir.name) not registered > registering directory"
-                        $response = Set-RegisteredDirectory -ServerURL $ServerUrl -Token $token.token -Referer $Referer -Name $dir.name -PhysicalPath $dir.physicalPath -DirectoryType $dir.directoryType
-                        Write-Verbose "Set-RegisteredDirectory Response :-$response"
+                        $response = Register-SystemDirectory -URL $ServerBaseUrl -Token $token.token -Referer $Referer -Name $dir.name -PhysicalPath $dir.physicalPath -DirectoryType $dir.directoryType
+                        Write-Verbose "Register-SystemDirectory Response :-$response"
                     }
                 }
             }else{
@@ -132,14 +137,14 @@ function Test-TargetResource
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
     $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
     Write-Verbose "Fully Qualified Domain Name :- $FQDN" 
-    $Referer = 'http://localhost'
-    $ServerUrl = "https://$($FQDN):6443"
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+    $Referer = $ServerBaseUrl
     $result = $true
-    Write-Verbose "Getting the Token for site '$ServerUrl'"
-    $token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer 
+    Write-Verbose "Getting the Token for site '$ServerBaseUrl'"
+    $token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer 
     try {  
         if($null -ne $token.token -and $DirectoriesJSON) { #setting registered directories
-            $responseDirectories = Get-RegisteredDirectories -ServerURL $ServerUrl -Token $token.token -Referer $Referer
+            $responseDirectories = Get-SystemDirectories -URL $ServerBaseUrl -Token $token.token -Referer $Referer
             ForEach ($dir in ($DirectoriesJSON | ConvertFrom-Json)) 
             {
                 Write-Verbose "Testing for Directory $($dir.name)"
@@ -165,62 +170,6 @@ function Test-TargetResource
     }
     elseif($Ensure -ieq 'Absent') {        
         (-not($result))
-    }
-}
-
-function Get-RegisteredDirectories 
-{ # returns list of Servers registerd Directories 
-    [CmdletBinding()]
-	param
-	(
-        [System.String]
-        $ServerURL, 
-
-        [System.String]
-        $Token, 
-
-        [System.String]
-        $Referer
-	)
-
-    $Url  = $ServerURL.TrimEnd("/") + "/arcgis/admin/system/directories"
-    try{
-        Invoke-ArcGISWebRequest -Url $Url -HttpFormParameters  @{ f= 'pjson'; token = $Token; } -Referer $Referer -TimeOutSec 150
-    }catch{
-        Write-Verbose "[WARNING] Response from $Url (Get-RegisteredDirectories) is - $_"
-    }
-}
-
-function Set-RegisteredDirectory
-{ # adds an directory to Server registerd Directories 
-    [CmdletBinding()]
-	param
-	(
-        [System.String]
-        $ServerURL, 
-
-        [System.String]
-        $Token, 
-
-        [System.String]
-        $Referer,
-
-        [System.String]
-        $Name,
-
-        [System.String]
-        $PhysicalPath,
-
-        [System.String]
-        $DirectoryType
-	)
-
-    $Url  = $ServerURL.TrimEnd("/") + "/arcgis/admin/system/directories/register"   
-    $props = @{ f= 'pjson'; token = $Token; name = $Name; physicalPath = $PhysicalPath; directoryType = $DirectoryType; }
-    try{
-        Invoke-ArcGISWebRequest -Url $Url -HttpFormParameters $props -Referer $Referer -TimeOutSec 150
-    }catch{
-        Write-Verbose "[WARNING] Response from $Url (Get-RegisteredDirectories) is - $_"
     }
 }
 

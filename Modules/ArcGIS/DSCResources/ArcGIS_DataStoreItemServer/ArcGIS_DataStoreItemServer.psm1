@@ -5,6 +5,10 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
+
 function Get-TargetResource {
 	[CmdletBinding()]
 	[OutputType([System.Collections.Hashtable])]
@@ -49,7 +53,7 @@ function Get-TargetResource {
 		$ForceUpdate = $false
 	)
 
-	$null
+	@{}
 }
 
 function Set-TargetResource {
@@ -99,33 +103,34 @@ function Set-TargetResource {
 	
 	[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 	$FQDN = if ($ServerHostName) { Get-FQDN $ServerHostName }else { Get-FQDN $env:COMPUTERNAME }
-	$Scheme = if ($ServerHostPort -eq 6080 -or $ServerHostPort -eq 80) { 'http' } else { 'https' }
-	$ServerUrl = "$($Scheme)://$($FQDN):$($ServerHostPort)"
-	Write-Verbose "ServerURL:- $ServerUrl"
-	$Referer = 'http://locahost'
-	$token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName $ServerSiteName -Credential $SiteAdministrator -Referer $Referer 
-	$DataStoreItemUrl = $ServerURL.TrimEnd('/') + '/' + $ServerSiteName + '/admin/data' 
-
+	$ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -Port $ServerHostPort -FQDN $FQDN -Context $ServerSiteName
+	Write-Verbose "ServerBaseURL:- $ServerBaseUrl"
+	$Referer = 'https://localhost'
+	$token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer 
+	
 	if($Ensure -ieq 'Present') {
 		# Get Data Store Item Connection Object
 		$DataStoreItemConnectionObject = Get-DataStoreItemConnectionObject -ItemName $Name -DataStoreType $DataStoreType -ConnectionString $ConnectionString -ConnectionSecret $ConnectionSecret
 		# Validate Data Store Item Connection
-		if(Invoke-ValidateDataStoreItemConnection -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreItemConnectionObject $DataStoreItemConnectionObject){
-			if(Test-DataStoreItemExists -ItemName $Name -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreType $DataStoreType){
-				# Edit Data Store Item Connection
-				Edit-DataStoreItemConnection -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreItemConnectionObject $DataStoreItemConnectionObject
-			}else{
-				# Register Data Store Item
-				Register-DataStoreItem -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreItemConnectionObject $DataStoreItemConnectionObject
-			}
-		}else{
+		try{
+			Invoke-DataStoreItemOperation -URL $ServerBaseUrl -Token $token.token -Referer $Referer -ConnectionObject $DataStoreItemConnectionObject -OperationName "validateDataItem" -Verbose
+		}catch{
 			throw "Validation of Data Store Item Connection failed."
 		}
+		
+		$DataStoreItems = Get-DsItems -ItemName $Name -ServerBaseUrl $ServerBaseUrl -Token $token.token -Referer $Referer -DataStoreType $DataStoreType
+		if(($DataStoreItems| Measure-Object).Count -gt 0){
+			# Edit Data Store Item Connection
+			Invoke-DataStoreItemOperation -URL $ServerBaseUrl -Token $token.token -Referer $Referer -ConnectionObject $DataStoreItemConnectionObject -OperationName "edit" -Verbose
+		}else{
+			# Register Data Store Item
+			Invoke-DataStoreItemOperation -URL $ServerBaseUrl -Token $token.token -Referer $Referer -ConnectionObject $DataStoreItemConnectionObject -OperationName "registerItem" -Verbose
+		}
+		
 	}elseif($Ensure -ieq 'Absent') {
-		$DataStoreItemTest = Test-DataStoreItemExists -ItemName $Name -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreType $DataStoreType
-		if($DataStoreItemTest){
-			$DSItem = Get-DsItems -ItemName $Name -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreType $DataStoreType
-			Unregister-DataStoreItem -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreItemPath $DSItem.Path -Force $true -Verbose
+		$DSItem = Get-DsItems -ItemName $Name -ServerBaseUrl $ServerBaseUrl -Token $token.token -Referer $Referer -DataStoreType $DataStoreType
+		if(($DSItem| Measure-Object).Count -gt 0){
+			Invoke-DataStoreItemOperation -URL $ServerBaseUrl -Token $token.token -Referer $Referer -DataStoreItemPath $DSItem.Path -Force $true -OperationName "unregisterItem" -Verbose
 		}
 	}
 }
@@ -180,19 +185,18 @@ function Test-TargetResource {
 	[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 	$result = $false
 	$FQDN = if ($ServerHostName) { Get-FQDN $ServerHostName }else { Get-FQDN $env:COMPUTERNAME }
-	$Scheme = if ($ServerHostPort -eq 6080 -or $ServerHostPort -eq 80) { 'http' } else { 'https' }
-	$ServerUrl = "$($Scheme)://$($FQDN):$($ServerHostPort)"
-	Write-Verbose "ServerURL:- $ServerUrl"
-	$Referer = 'http://locahost'
-	$token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName $ServerSiteName -Credential $SiteAdministrator -Referer $Referer 
+	$ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -Port $ServerHostPort -FQDN $FQDN -Context $ServerSiteName
+	Write-Verbose "ServerBaseURL:- $ServerBaseUrl"
+	$Referer = 'https://localhost'
+	
+	$token = Get-ServerToken -URL $ServerBaseUrl  -Credential $SiteAdministrator -Referer $Referer 
 	
 	if($Ensure -ieq "Present" -and $DataStoreType -ieq "TileCache"){
 		throw "TileCache Data Store registration is not supported in ArcGIS_DataStoreItemServer. Please use the ArcGIS_DataStore resource to register TileCache Data Store."
 	}
-
-	$DataStoreItemUrl = $ServerURL.TrimEnd('/') + '/' + $ServerSiteName + '/admin/data' 
-	$DataStoreItemTest = Test-DataStoreItemExists -ItemName $Name -DataStoreItemUrl $DataStoreItemUrl -Token $token.token -Referer $Referer -DataStoreType $DataStoreType
-	if($DataStoreItemTest){
+	
+	$DataStoreItems = Get-DsItems -ItemName $Name -ServerBaseUrl $ServerBaseUrl -Token $token.token -Referer $Referer -DataStoreType $DataStoreType
+	if(($DataStoreItems| Measure-Object).Count -gt 0){
 		if($ForceUpdate -and $Ensure -ieq 'Present'){
 			Write-Verbose "$DataStoreType DataStore Item with name '$Name' exists. Force Update specified."
 		}else{
@@ -218,7 +222,7 @@ function Get-DsItems
 		$ItemName,
 
 		[System.String]
-		$DataStoreItemUrl,
+		$ServerBaseUrl,
 		
 		[System.String]
 		$Token,
@@ -229,234 +233,12 @@ function Get-DsItems
 		[System.String]
 		$DataStoreType
 	)
-	$result = Get-DSAncestorPathOrItemType -DataStoreType $DataStoreType
-	$TypeString =$result[0]
-	$AncestorPath = $result[1]
-
-	$DataItemsUrl = $DataStoreItemUrl + '/findItems'
-	$DataStoreItems = Invoke-ArcGISWebRequest -Url $DataItemsUrl -HttpFormParameters  @{ f = 'json'; token = $Token; types = $TypeString; ancestorPath = $AncestorPath } -Referer $Referer 
-	if($ItemName -ieq "OzoneObjectStore"){
-		return ($DataStoreItems.items | Where-Object { $_.provider -ieq "ArcGIS Data Store" })
-	}
-	elseif( $ItemName -ieq "TileCache"){
-		return ($DataStoreItems.items | Where-Object { $_.provider -ieq "ArcGIS Data Store" -and ($_.info.dsFeature -ieq $DataStoreType)})
-	}
-	else{
-		return ($DataStoreItems.items | Where-Object { $_.path -ieq "$($AncestorPath)/$($ItemName)" })
+	if($ItemName -ieq "TileCache" -or $ItemName -ieq "OzoneObjectStore"){
+		return @(Find-DataItems -URL $ServerBaseUrl -Token $Token -Type $DataStoreType -IsArcGISDataStore -Referer $Referer -Verbose)
+	}else{
+		return @(Find-DataItems -URL $ServerBaseUrl -Token $Token -Type $DataStoreType -ItemName $ItemName -Referer $Referer -Verbose)
 	}
 }
-
-function Test-DataStoreItemExists {
-	[CmdletBinding()]
-	param(
-		[System.String]
-		$ItemName,
-
-		[System.String]
-		$DataStoreItemUrl,
-
-		[System.String]
-		$Token, 
-
-		[System.String]
-		$Referer = 'http://localhost',
-
-		[System.String]
-		$DataStoreType
-	)
-
-	return ((Get-DsItems -ItemName $ItemName -DataStoreItemUrl $DataStoreItemUrl -Token $Token -Referer $Referer -DataStoreType $DataStoreType) | Measure-Object).Count -gt 0
-}
-
-function Get-DSAncestorPathOrItemType {
-	[CmdletBinding()]
-	param
-	(
-		[System.String]
-		$DataStoreType
-	)
-
-	$TypeString = ""
-	$AncestorPath = ""
-	if ($DataStoreType -ieq 'Folder') {
-		$TypeString = "folder"
-		$AncestorPath = "/fileShares"
-	}
-	elseif ($DataStoreType -ieq 'CloudStore') {
-		$TypeString = "cloudStore"
-		$AncestorPath = "/cloudStores"
-	}
-	elseif ($DataStoreType -ieq 'ObjectStore') {
-		$TypeString = "objectStore"
-		$AncestorPath = "/cloudStores"
-	}
-	elseif ($DataStoreType -ieq 'TileCache') {
-		$TypeString = "nosql"
-		$AncestorPath = "/nosqlDatabases"
-	}
-	elseif ($DataStoreType -ieq 'BigDataFileShare') { 
-		$TypeString = "bigDataFileShare"
-		$AncestorPath = "/bigDataFileShares"
-	}
-	elseif ($DataStoreType -ieq 'RasterStore') {
-		$TypeString = "rasterStores"
-		$AncestorPath = "/rasterStores"
-	}
-	return @($TypeString, $AncestorPath)
-}
-
-function Invoke-ValidateDataStoreItemConnection {
-	[CmdletBinding()]
-	[OutputType([System.Boolean])]
-	param
-	(
-		[System.String]
-		$DataStoreItemUrl,
-
-		[System.String]
-		$Token,
-
-		[System.String]
-		$Referer = 'http://localhost',
-
-		[System.Object]
-		$DataStoreItemConnectionObject
-	)
-
-	$FormParameters = @{ 
-		f     = 'json'; 
-		token = $Token; 
-		item  = (ConvertTo-Json -InputObject $DataStoreItemConnectionObject -Depth 5 -Compress)
-	}
-	$ValidateDataStoreItemUrl = $DataStoreItemUrl+ "/validateDataItem"
-	$response = Invoke-ArcGISWebRequest -Url $ValidateDataStoreItemUrl -HttpFormParameters $FormParameters -Referer $Referer 
-	if ($response.status -ieq 'success') {
-		Write-Verbose "Validation of Data Store Item successful"
-		return $true
-	}
-	else {
-		if (($response.status -ieq 'error') -and $response.messages) {
-			throw "[ERROR]:- Validation of Data Store Item failed. $($response.messages -join ',')"
-		}
-	}
-}
-
-function Edit-DataStoreItemConnection {
-	[CmdletBinding()]
-	[OutputType([System.Boolean])]
-	param
-	(
-		[System.String]
-		$DataStoreItemUrl,
-
-		[System.String]
-		$Token,
-
-		[System.String]
-		$Referer = 'http://localhost',
-
-		[System.Object]
-		$DataStoreItemConnectionObject
-	)
-
-	$FormParameters = @{ 
-		f     = 'json'; 
-		token = $Token; 
-		item  = (ConvertTo-Json -InputObject $DataStoreItemConnectionObject -Depth 5 -Compress)
-	}
-
-	$EditDataStoreItemUrl = $DataStoreItemUrl + '/items'+$($DataStoreItemConnectionObject.path)+'/edit'
-	$response = Invoke-ArcGISWebRequest -Url $EditDataStoreItemUrl -HttpFormParameters $FormParameters -Referer $Referer 
-	if ($response.status -ieq 'success') {
-		Write-Verbose "Edit of Data Store item connection successful."
-		return $true
-	}
-	else {
-		if (($response.status -ieq 'error') -and $response.messages) {
-			throw "[ERROR]:- Edit of Data Store item connection failed. $($response.messages -join ',')"
-		}
-	}
-}
-
-function Register-DataStoreItem {
-	[CmdletBinding()]
-	[OutputType([System.Boolean])]
-	param
-	(
-		[System.String]
-		$DataStoreItemUrl,
-
-		[System.String]
-		$Token,
-
-		[System.String]
-		$Referer = 'http://localhost',
-
-		[System.Object]
-		$DataStoreItemConnectionObject
-	)
-	
-	$FormParameters = @{ 
-		f     = 'json'; 
-		token = $Token; 
-		item  = (ConvertTo-Json -InputObject $DataStoreItemConnectionObject -Depth 5 -Compress)
-	}
-
-	$RegisterDataStoreItemUrl = $DataStoreItemUrl + '/registerItem'
-
-	$response = Invoke-ArcGISWebRequest -Url $RegisterDataStoreItemUrl -HttpFormParameters $FormParameters -Referer $Referer 
-	if ($response.status -ieq 'success') {
-		Write-Verbose "Registration of Data Store Item successful"
-		return $true
-	}
-	else {
-		if (($response.status -ieq 'error') -and $response.messages) {
-			throw "[ERROR]:- Registration of Data Store Item failed. $($response.messages -join ',')"
-		}
-	}
-}
-
-function Unregister-DataStoreItem {
-	[CmdletBinding()]
-	[OutputType([System.Boolean])]
-	param
-	(
-		[System.String]
-		$DataStoreItemUrl,
-
-		[System.String]
-		$Token,
-
-		[System.String]
-		$Referer = 'http://localhost',
-
-		[System.String]
-		$DataStoreItemPath,
-
-		[System.Boolean]
-		$Force = $false
-	)
-	
-	$FormParameters = @{ 
-		f     = 'json'; 
-		token = $Token; 
-		itemPath = $DataStoreItemPath
-		force = "$Force"
-	}
-	$UnregisterDataStoreItemUrl = $DataStoreItemUrl + '/unregisterItem'
-
-	$response = Invoke-ArcGISWebRequest -Url $UnregisterDataStoreItemUrl -HttpFormParameters $FormParameters -Referer $Referer -Verbose
-	if ($response.status -ieq 'success') {
-		Write-Verbose "Unregister of Data Store Item successful"
-		return $true
-	}
-	else {
-		if (($response.status -ieq 'error') -and $response.messages) {
-			throw "[ERROR]:- Unregister of Data Store Item failed. $($response.messages -join ',')"
-		}
-	}
-}
-
 
 function Get-DataStoreItemConnectionObject {
 	[CmdletBinding()]
