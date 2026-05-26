@@ -21,7 +21,7 @@ Configuration RemoveStandbyGraphStoreConfiguration
         Script "RemoveStandbyGraphStoreConfiguration"
         {
             GetScript = {
-                $null
+                @{}
             }
             TestScript = {
                 $false

@@ -3,7 +3,7 @@
     param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0",
+        $Version = "12.1",
 
         [parameter(Mandatory = $true)]
         [System.String]
@@ -36,10 +36,10 @@
 
 	Import-DscResource -ModuleName PSDesiredStateConfiguration 
     Import-DSCResource -ModuleName ArcGIS
-    Import-DscResource -Name ArcGIS_Install 
-    Import-DscResource -name ArcGIS_WindowsService
+    Import-DscResource -Name ArcGIS_Install
     Import-DscResource -Name ArcGIS_Service_Account
     Import-DscResource -Name ArcGIS_HostNameSettings
+    Import-DscResource -Name ArcGIS_WindowsService
     
     $UpgradeSetupsStagingPath = "C:\ArcGIS\Deployment\Downloads\$($Version)"
 
@@ -61,15 +61,14 @@
             }
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager CleanupDownloadsFolder{
+        ArcGIS_AzureSetupsManager CleanupDownloadsFolder{
             Version = $Version
             OperationType = 'CleanupDownloadsFolder'
             ComponentNames = "All"
         }
-        $Depends = @("[ArcGIS_AzureSetupDownloadsFolderManager]CleanupDownloadsFolder")
+        $Depends = @("[ArcGIS_AzureSetupsManager]CleanupDownloadsFolder")
 
-        $VersionArray = $Version.Split(".")
-        if($IsMultiMachinePortal -and (($VersionArray[0] -gt 11) -or ($VersionArray[0] -ieq 11 -and $VersionArray[1] -ge 3))){ # 11.3 or later
+        if($IsMultiMachinePortal -and ([version]$Version -ge "11.3")){ # 11.3 or later
             ArcGIS_xFirewall Portal_Ignite_OutBound
             {
                 Name                  = "PortalforArcGIS-Ignite-Outbound" 
@@ -100,7 +99,7 @@
             $Depends += @('[ArcGIS_xFirewall]Portal_Ignite_InBound')
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager DownloadPortalUpgradeSetup{
+        ArcGIS_AzureSetupsManager DownloadPortalUpgradeSetup{
             Version = $Version
             OperationType = 'DownloadUpgradeSetups'
             ComponentNames = "Portal"
@@ -108,7 +107,7 @@
             UpgradeSetupsSourceFileShareCredentials = $FileshareMachineCredential
             DependsOn = $Depends
         }
-        $Depends += '[ArcGIS_AzureSetupDownloadsFolderManager]DownloadPortalUpgradeSetup'
+        $Depends += '[ArcGIS_AzureSetupsManager]DownloadPortalUpgradeSetup'
         
         
         $PortalInstallerPathOnMachine = "$($UpgradeSetupsStagingPath)\PortalforArcGIS.exe"
@@ -157,7 +156,7 @@
                 }
 			}
 			TestScript = { -not(Test-Path $using:PortalInstallerPathOnMachine) -and -not(Test-Path $using:PortalInstallerVolumePathOnMachine) -and -not(Test-Path $using:WebStylesInstallerPathOnMachine) }
-			GetScript = { $null }
+			GetScript = { @{} }
             DependsOn = $Depends
 		}
         $Depends += '[Script]RemovePortalAndWebStyleInstallers'

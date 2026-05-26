@@ -3,7 +3,7 @@
 	param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0"
+        $Version = "12.1"
 
         ,[Parameter(Mandatory=$false)]
         [System.Boolean]
@@ -52,11 +52,11 @@
     Import-DSCResource -ModuleName ArcGIS
 	Import-DscResource -Name ArcGIS_DataStore
     Import-DscResource -Name ArcGIS_Service_Account
-    Import-DscResource -name ArcGIS_WindowsService
     Import-DscResource -Name ArcGIS_xFirewall
     Import-DscResource -Name ArcGIS_Disk
-    Import-DscResource -Name ArcGIS_AzureSetupDownloadsFolderManager
+    Import-DscResource -Name ArcGIS_AzureSetupsManager
     Import-DscResource -Name ArcGIS_HostNameSettings
+    Import-DscResource -Name ArcGIS_WindowsService
     
     $ServerHostNames = ($ServerMachineNames -split ',')
     $ServerMachineName = $ServerHostNames | Select-Object -First 1
@@ -89,7 +89,7 @@
             }
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager CleanupDownloadsFolder{
+        ArcGIS_AzureSetupsManager CleanupDownloadsFolder{
             Version = $Version
             OperationType = 'CleanupDownloadsFolder'
             ComponentNames = if($IsCurrentMachineInServerList){ "DataStore,Server,Portal" }else{ "DataStore" }
@@ -179,7 +179,7 @@
                     $DataStoreDependsOn += @('[ArcGIS_xFirewall]DataStore_FirewallRules_OutBound')
                 }
 
-                if($Version -ieq "12.0"){
+                if($Version -ieq "12.0" -or $Version -ieq "12.0"){
                     ArcGIS_xFirewall MemoryCache_DataStore_FirewallRules
                     {
                         Name                  = "ArcGISMemoryCacheDataStore" 

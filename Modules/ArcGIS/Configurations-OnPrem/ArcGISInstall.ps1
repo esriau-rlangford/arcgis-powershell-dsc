@@ -22,7 +22,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_Install, ArcGIS_InstallMsiPackage, ArcGIS_InstallPatch, ArcGIS_xFirewall, ArcGIS_Tomcat
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_Install, ArcGIS_InstallMsiPackage, ArcGIS_InstallPatch, ArcGIS_xFirewall, ArcGIS_Tomcat
 
     Node $AllNodes.NodeName {
 
@@ -59,9 +59,6 @@
         {
             $NodeRoleArray += "Portal"
         }
-        if(($Node.Role -icontains "Server" -or $Node.Role -icontains "Portal") -and $ConfigurationData.ConfigData.Insights){
-            $NodeRoleArray += "Insights"
-        }
         if($Node.Role -icontains "DataStore")
         {
             $NodeRoleArray += "DataStore"
@@ -69,10 +66,6 @@
         if($Node.Role -icontains "WebAdaptor")
         {
             $NodeRoleArray += "WebAdaptor"
-        }
-        if($Node.Role -icontains "Desktop")
-        {
-            $NodeRoleArray += "Desktop"
         }
         if($Node.Role -icontains "Pro")
         {
@@ -93,12 +86,12 @@
             {
                 'Server'
                 {
-                    $ServerTypeName = if(@("MissionServer", "NotebookServer", "VideoServer") -iContains $ConfigurationData.ConfigData.ServerRole){ $ConfigurationData.ConfigData.ServerRole }else{ "Server" }
+                    $ServerTypeName = if(@("MissionServer", "NotebookServer", "VideoServer","DataPipelinesServer") -iContains $ConfigurationData.ConfigData.ServerRole){ $ConfigurationData.ConfigData.ServerRole }else{ "Server" }
 
                     $ServerFeatureSet = @()
                     $ServerInstallArguments = "/qn ACCEPTEULA=YES InstallDir=`"$($ConfigurationData.ConfigData.Server.Installer.InstallDir)`""
                     if($ServerTypeName -ieq "Server"){
-                        if(@("11.0","11.1","11.2","11.3","11.4") -iContains $ConfigurationData.ConfigData.Version){
+                        if([version]($ConfigurationData.ConfigData.Version) -ge "11.0"){
                             $EnableDontet = $True
                             if($ConfigurationData.ConfigData.Server.Installer.ContainsKey("EnableDotnetSupport")){
                                 $EnableDontet = $ConfigurationData.ConfigData.Server.Installer.EnableDotnetSupport
@@ -131,7 +124,7 @@
                         if($ServerFeatureSet.Count -eq 0){
                             $ServerFeatureSet = $null
                         }
-                    }
+                    }                    
 
                     ArcGIS_Install ServerInstall
                     {
@@ -139,7 +132,7 @@
                         Version = $ConfigurationData.ConfigData.Version
                         Path = $ConfigurationData.ConfigData.Server.Installer.Path
                         Extract = if($ConfigurationData.ConfigData.Server.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.Server.Installer.IsSelfExtracting }else{ $True }
-                        DotnetDesktopRuntimePath = if(@("10.9.1","11.0","11.1","11.2","11.3","11.4") -iContains $ConfigurationData.ConfigData.Version){ $ConfigurationData.ConfigData.Server.Installer.DotnetDesktopRuntimePath }else{ $null }
+                        DotnetDesktopRuntimePath = $ConfigurationData.ConfigData.Server.Installer.DotnetDesktopRuntimePath
                         Arguments = $ServerInstallArguments
                         FeatureSet = $ServerFeatureSet
                         ServiceCredential = $ServiceCredential
@@ -148,6 +141,7 @@
                         EnableMSILogging = $EnableMSILogging
                         Ensure = "Present"
                     }
+                    $ServerDependsOn = @('[ArcGIS_Install]ServerInstall')
 
                     if($ServerTypeName -ieq "Server" -and $ConfigurationData.ConfigData.Server.Extensions){
                         foreach ($Extension in $ConfigurationData.ConfigData.Server.Extensions.GetEnumerator())
@@ -174,7 +168,9 @@
                                 FeatureSet = $ServerExtensionFeatureSet
                                 EnableMSILogging = $EnableMSILogging
                                 Ensure = "Present"
+                                DependsOn = $ServerDependsOn
                             }
+                            $ServerDependsOn += "[ArcGIS_Install]Server$($Extension.Key)InstallExtension"
                         }
                     }
 
@@ -187,12 +183,14 @@
                             PatchesDir = $ConfigurationData.ConfigData.Server.Installer.PatchesDir
                             PatchInstallOrder = $ConfigurationData.ConfigData.Server.Installer.PatchInstallOrder
                             Ensure = "Present"
+                            DependsOn = $ServerDependsOn
                         }
+                        $ServerDependsOn += "[ArcGIS_InstallPatch]ServerInstallPatch"
                     }
 
                     if($ConfigurationData.ConfigData.ServerRole -ieq "NotebookServer" -and $ConfigurationData.ConfigData.Server.Installer.NotebookServerSamplesDataPath) 
                     {
-                        if(@("10.9","10.9.1","11.0","11.1","11.2","11.3") -icontains $ConfigurationData.ConfigData.Version){
+                        if(@("10.9.1","11.0","11.1","11.2","11.3") -icontains $ConfigurationData.ConfigData.Version){
                             ArcGIS_Install "NotebookServerSamplesData$($Node.NodeName)"
                             { 
                                 Name = "NotebookServerSamplesData"
@@ -205,6 +203,7 @@
                                 ServiceCredentialIsMSA = $ServiceCredentialIsMSA
                                 EnableMSILogging = $EnableMSILogging
                                 Ensure = "Present"
+                                DependsOn = $ServerDependsOn
                             }
                         }
                     }
@@ -223,6 +222,7 @@
                             ServiceCredentialIsMSA = $ServiceCredentialIsMSA
                             EnableMSILogging = $EnableMSILogging
                             Ensure = "Present"
+                            DependsOn = $ServerDependsOn
                         }
 
                         if ($ConfigurationData.ConfigData.WorkflowManagerServer.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
@@ -234,6 +234,7 @@
                                 PatchesDir = $ConfigurationData.ConfigData.WorkflowManagerServer.Installer.PatchesDir
                                 PatchInstallOrder = $ConfigurationData.ConfigData.WorkflowManagerServer.Installer.PatchInstallOrder
                                 Ensure = "Present"
+                                DependsOn = @('[ArcGIS_Install]WorkflowManagerServerInstall')
                             }
                         }
                     }
@@ -253,6 +254,7 @@
                             ServiceCredentialIsMSA = $ServiceCredentialIsMSA
                             EnableMSILogging = $EnableMSILogging
                             Ensure = "Present"
+                            DependsOn = $ServerDependsOn
                         }
 
                         if ($ConfigurationData.ConfigData.GeoEventServer.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
@@ -264,12 +266,77 @@
                                 PatchesDir = $ConfigurationData.ConfigData.GeoEventServer.Installer.PatchesDir
                                 PatchInstallOrder = $ConfigurationData.ConfigData.GeoEventServer.Installer.PatchInstallOrder
                                 Ensure = "Present"
+                                DependsOn = @('[ArcGIS_Install]GeoEventServerInstall')
+                            }
+                        }
+                    }
+
+                    if($ConfigurationData.ConfigData.RealityServer) 
+                    {
+                        ArcGIS_Install RealityServerInstall
+                        {
+                            Name = "RealityServer"
+                            Version = $ConfigurationData.ConfigData.Version
+                            Path = $ConfigurationData.ConfigData.RealityServer.Installer.Path
+                            Extract = if($ConfigurationData.ConfigData.RealityServer.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.RealityServer.Installer.IsSelfExtracting }else{ $True }
+                            Arguments = "/qn"
+                            ServiceCredential = $ServiceCredential
+                            ServiceCredentialIsDomainAccount =  $ServiceCredentialIsDomainAccount
+                            ServiceCredentialIsMSA = $ServiceCredentialIsMSA
+                            EnableMSILogging = $EnableMSILogging
+                            Ensure = "Present"
+                            DependsOn = $ServerDependsOn
+                        }
+
+                        if ($ConfigurationData.ConfigData.RealityServer.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
+                            ArcGIS_InstallPatch RealityServerInstallPatch
+                            {
+                                Name = "RealityServer"
+                                Version = $ConfigurationData.ConfigData.Version
+                                DownloadPatches = if($ConfigurationData.ConfigData.DownloadPatches){ $ConfigurationData.ConfigData.DownloadPatches }else{ $False }
+                                PatchesDir = $ConfigurationData.ConfigData.RealityServer.Installer.PatchesDir
+                                PatchInstallOrder = $ConfigurationData.ConfigData.RealityServer.Installer.PatchInstallOrder
+                                Ensure = "Present"
+                                DependsOn = @('[ArcGIS_Install]RealityServerInstall')
+                            }
+                        }
+                    }
+
+                    if($ConfigurationData.ConfigData.GeoEnrichmentServer) {
+                        ArcGIS_Install GeoEnrichmentServerInstall
+                        {
+                            Name = "GeoEnrichmentServer"
+                            Version = $ConfigurationData.ConfigData.Version
+                            Path = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.Path
+                            Extract = if($ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.IsSelfExtracting }else{ $True }
+                            DotnetDesktopRuntimePath = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.DotnetDesktopRuntimePath
+                            Arguments = "/qn"
+                            FeatureSet = if($ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.EnableSemanticSearch){ @("SemanticSearch") }else{ $null }
+                            ServiceCredential = $ServiceCredential
+                            ServiceCredentialIsDomainAccount =  $ServiceCredentialIsDomainAccount
+                            ServiceCredentialIsMSA = $ServiceCredentialIsMSA
+                            EnableMSILogging = $EnableMSILogging
+                            Ensure = "Present"
+                            DependsOn = $ServerDependsOn
+                        }
+
+                        if ($ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
+                            ArcGIS_InstallPatch GeoEnrichmentServerInstallPatch
+                            {
+                                Name = "GeoEnrichmentServer"
+                                Version = $ConfigurationData.ConfigData.Version
+                                DownloadPatches = if($ConfigurationData.ConfigData.DownloadPatches){ $ConfigurationData.ConfigData.DownloadPatches }else{ $False }
+                                PatchesDir = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.PatchesDir
+                                PatchInstallOrder = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.PatchInstallOrder
+                                Ensure = "Present"
+                                DependsOn = @('[ArcGIS_Install]GeoEnrichmentServerInstall')
                             }
                         }
                     }
                 }
                 'Portal'
                 {        
+                    $PortalDependsOn = @()
                     ArcGIS_Install "PortalInstall$($Node.NodeName)"
                     { 
                         Name = "Portal"
@@ -283,9 +350,9 @@
                         EnableMSILogging = $EnableMSILogging
                         Ensure = "Present"
                     }
+                    $PortalDependsOn = @("[ArcGIS_Install]PortalInstall$($Node.NodeName)")
 
-                    $VersionArray = $ConfigurationData.ConfigData.Version.Split(".")
-                    if(($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -and $VersionArray[1] -gt 7) -or $Version -ieq "10.7.1") -and $ConfigurationData.ConfigData.Portal.Installer.WebStylesPath){
+                    if($ConfigurationData.ConfigData.Portal.Installer.WebStylesPath){
                         ArcGIS_Install "WebStylesInstall$($Node.NodeName)"
                         { 
                             Name = "WebStyles"
@@ -298,7 +365,9 @@
                             ServiceCredentialIsMSA = $ServiceCredentialIsMSA
                             EnableMSILogging = $EnableMSILogging
                             Ensure = "Present"
+                            DependsOn = $PortalDependsOn
                         }
+                        $PortalDependsOn += "[ArcGIS_Install]WebStylesInstall$($Node.NodeName)"
                     }
 
                     if ($ConfigurationData.ConfigData.Portal.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
@@ -310,52 +379,9 @@
                             PatchesDir = $ConfigurationData.ConfigData.Portal.Installer.PatchesDir
                             PatchInstallOrder = $ConfigurationData.ConfigData.Portal.Installer.PatchInstallOrder
                             Ensure = "Present"
+                            DependsOn = $PortalDependsOn
                         }
-                    }
-
-                    if($ConfigurationData.ConfigData.WorkflowManagerWebApp) 
-                    {
-                        ArcGIS_Install WorkflowManagerWebAppInstall
-                        {
-                            Name = "WorkflowManagerWebApp"
-                            Version = $ConfigurationData.ConfigData.Version
-                            Path = $ConfigurationData.ConfigData.WorkflowManagerWebApp.Installer.Path
-                            Extract = if($ConfigurationData.ConfigData.WorkflowManagerWebApp.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.WorkflowManagerWebApp.Installer.IsSelfExtracting }else{ $True }
-                            Arguments = "/qn ACCEPTEULA=Yes"
-                            ServiceCredential = $ServiceCredential
-                            ServiceCredentialIsDomainAccount =  $ServiceCredentialIsDomainAccount
-                            ServiceCredentialIsMSA = $ServiceCredentialIsMSA
-                            EnableMSILogging = $EnableMSILogging
-                            Ensure = "Present"
-                        }
-                    }
-                }
-                'Insights'
-                {
-                    ArcGIS_Install InsightsInstall
-                    {
-                        Name = "Insights"
-                        Version = $ConfigurationData.ConfigData.InsightsVersion
-                        Path = $ConfigurationData.ConfigData.Insights.Installer.Path
-                        Extract = if($ConfigurationData.ConfigData.Insights.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.Insights.Installer.IsSelfExtracting }else{ $True }
-                        Arguments = "/qn ACCEPTEULA=YES"
-                        ServiceCredential = $ServiceCredential
-                        ServiceCredentialIsDomainAccount =  $ServiceCredentialIsDomainAccount
-                        ServiceCredentialIsMSA = $ServiceCredentialIsMSA
-                        EnableMSILogging = $EnableMSILogging
-                        Ensure = "Present"
-                    }
-
-                    if ($ConfigurationData.ConfigData.Insights.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
-                        ArcGIS_InstallPatch InsightsInstallPatch
-                        {
-                            Name = "Insights"
-                            Version = $ConfigurationData.ConfigData.InsightsVersion
-                            DownloadPatches = if($ConfigurationData.ConfigData.DownloadPatches){ $ConfigurationData.ConfigData.DownloadPatches }else{ $False }
-                            PatchesDir = $ConfigurationData.ConfigData.Insights.Installer.PatchesDir
-                            PatchInstallOrder = $ConfigurationData.ConfigData.Insights.Installer.PatchInstallOrder
-                            Ensure = "Present"
-                        }
+                        $PortalDependsOn += "[ArcGIS_InstallPatch]PortalInstallPatch"
                     }
                 }
                 'DataStore'
@@ -363,7 +389,7 @@
                     $Arguments = "/qn ACCEPTEULA=YES InstallDir=`"$($ConfigurationData.ConfigData.DataStore.Installer.InstallDir)`""
 
                     $DsFeatureSet = $Null
-                    if(@("11.0","11.1","11.2","11.3","11.4","11.5","12.0") -iContains $ConfigurationData.ConfigData.Version) {
+                    if([version]($ConfigurationData.ConfigData.Version) -ge "11.0"){
                         $DsFeatureSet = $Node.DataStoreTypes
                         if($ConfigurationData.ConfigData.DataStore.Installer.InstallAllFeatures){
                             $DsFeatureSet = @("ALL")
@@ -394,6 +420,7 @@
                             PatchesDir = $ConfigurationData.ConfigData.DataStore.Installer.PatchesDir
                             PatchInstallOrder = $ConfigurationData.ConfigData.DataStore.Installer.PatchInstallOrder
                             Ensure = "Present"
+                            DependsOn = @("[ArcGIS_Install]DataStoreInstall")
                         }
                     } 
                 }
@@ -402,7 +429,6 @@
                     $IsJavaWebAdaptor =if($ConfigurationData.ConfigData.WebAdaptor.ContainsKey("IsJavaWebAdaptor")){ $ConfigurationData.ConfigData.WebAdaptor.IsJavaWebAdaptor }else{ $False }
                     if($IsJavaWebAdaptor){
                         $TomcatDependsOn = @()
-                        $TomcatInstall = @()
                         $WAArguments = "/qn ACCEPTEULA=YES"
                         if($ConfigurationData.ConfigData.WebAdaptor.Installer.ContainsKey("InstallDir")){
                             $WAArguments += " INSTALLDIR=`"$($ConfigurationData.ConfigData.WebAdaptor.Installer.InstallDir)`""
@@ -413,16 +439,15 @@
 
                             # Check if old Tomcat exists, Uninstall old Web Adaptor first
                             if ($ApacheTomcatConfig.ContainsKey("OldVersion") -and $ApacheTomcatConfig.ContainsKey("OldServiceName")){
-                                Write-Verbose "Existing Tomcat configuration found: Version = $($ApacheTomcatConfig.OldVersion), Installed Service Name = $($ApacheTomcatConfig.OldServiceName)."
-                                    $TomcatDependsOn += "[ArcGIS_Tomcat]ApacheTomcatUninstall"
-
+                                    Write-Verbose "Existing Tomcat configuration found: Version = $($ApacheTomcatConfig.OldVersion), Installed Service Name = $($ApacheTomcatConfig.OldServiceName)."
                                     ArcGIS_Tomcat ApacheTomcatUninstall {
                                         Version                = $ApacheTomcatConfig.OldVersion
                                         Ensure                 = "Absent"
                                         ServiceName            = $ApacheTomcatConfig.OldServiceName
                                     }
+                                    $TomcatDependsOn += "[ArcGIS_Tomcat]ApacheTomcatUninstall"
                             }
-                            $TomcatInstall += "[ArcGIS_Tomcat]ApacheTomcatInstall"
+                            
                             ArcGIS_Tomcat ApacheTomcatInstall
                             {
                                 Version = $ApacheTomcatConfig.Version
@@ -436,6 +461,7 @@
                                 CertificatePassword = if($Node.SSLCertificate){$Node.SSLCertificate.Password}else{ $null}
                                 DependsOn = $TomcatDependsOn # Ensures old Tomcat is removed first
                             }
+                            $TomcatDependsOn += "[ArcGIS_Tomcat]ApacheTomcatInstall"
                         }
                         ArcGIS_Install WebAdaptorJavaInstall
                         { 
@@ -446,7 +472,7 @@
                             Arguments = $WAArguments
                             EnableMSILogging = $EnableMSILogging
                             Ensure = "Present"
-                            DependsOn = $TomcatInstall # Ensures Tomcat is installed first
+                            DependsOn = $TomcatDependsOn # Ensures Tomcat is installed first
                         }
 
                         if ($ConfigurationData.ConfigData.WebAdaptor.Installer.PatchesDir -and -not($SkipPatchInstalls)) { 
@@ -459,11 +485,13 @@
                                 PatchesDir = $ConfigurationData.ConfigData.WebAdaptor.Installer.PatchesDir
                                 PatchInstallOrder = $ConfigurationData.ConfigData.WebAdaptor.Installer.PatchInstallOrder
                                 Ensure = "Present"
+                                DependsOn = @("[ArcGIS_Install]WebAdaptorJavaInstall")
                             }
                         }
                     }
                     else
                     {
+                        $WADependsOn = @()
                         foreach($WA in $Node.WebAdaptorConfig){
                             $Context = "arcgis"
                             if($WA.ContainsKey("Context")){
@@ -484,11 +512,7 @@
                                 }
                             }
                             
-                            $VersionArray = $ConfigurationData.ConfigData.Version.Split(".")
-                            $WAArguments = "/qn ACCEPTEULA=YES VDIRNAME=$($Context) WEBSITE_ID=$($WebSiteId)"
-                            if($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -and $VersionArray[1] -gt 8)){
-                                $WAArguments += " CONFIGUREIIS=TRUE"
-                            }
+                            $WAArguments = "/qn ACCEPTEULA=YES VDIRNAME=$($Context) WEBSITE_ID=$($WebSiteId) CONFIGUREIIS=TRUE"
                             
                             $WAName = "WebAdaptorIIS-$($WA.Role)-$($Context)"
                             ArcGIS_Install "$($WAName)Install"
@@ -499,11 +523,12 @@
                                 Extract = if($ConfigurationData.ConfigData.WebAdaptor.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.WebAdaptor.Installer.IsSelfExtracting }else{ $True }
                                 Arguments = $WAArguments
                                 WebAdaptorContext = $Context
-                                WebAdaptorDotnetHostingBundlePath = if($VersionArray[0] -gt 10){ $ConfigurationData.ConfigData.WebAdaptor.Installer.DotnetHostingBundlePath }else{ $null }
-                                WebAdaptorWebDeployPath = if($VersionArray[0] -gt 10){ $ConfigurationData.ConfigData.WebAdaptor.Installer.WebDeployPath }else{ $null }
+                                WebAdaptorDotnetHostingBundlePath = if([version]($ConfigurationData.ConfigData.Version) -ge "11.0"){ $ConfigurationData.ConfigData.WebAdaptor.Installer.DotnetHostingBundlePath }else{ $null }
+                                WebAdaptorWebDeployPath = if([version]($ConfigurationData.ConfigData.Version) -ge "11.0"){ $ConfigurationData.ConfigData.WebAdaptor.Installer.WebDeployPath }else{ $null }
                                 EnableMSILogging = $EnableMSILogging
                                 Ensure = "Present"
                             }
+                            $WADependsOn = @("[ArcGIS_Install]$($WAName)Install")
                         }
 
                         if ($ConfigurationData.ConfigData.WebAdaptor.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
@@ -515,6 +540,7 @@
                                 PatchesDir = $ConfigurationData.ConfigData.WebAdaptor.Installer.PatchesDir
                                 PatchInstallOrder = $ConfigurationData.ConfigData.WebAdaptor.Installer.PatchInstallOrder
                                 Ensure = "Present"
+                                DependsOn = $WADependsOn
                             }
                         }
                     }
@@ -545,81 +571,11 @@
                                 Ensure = "Present"
                                 ProductId = $Client.ProductId
                                 Arguments = $Client.Arguments
+                                DependsOn = @("[File]SetupCopy$($ODBCDriverName.Replace(' ', '_'))")
                             } 
                         }
 
-                        if(Test-Path $TempFolder){ Remove-Item -Path $TempFolder -Recurse }
-                    }
-                }
-                'Desktop' {
-                    $Arguments =""
-                    if($ConfigurationData.ConfigData.Desktop.SeatPreference -ieq "Fixed"){
-                        $Arguments = "/qn ACCEPTEULA=YES INSTALLDIR=`"$($ConfigurationData.ConfigData.Desktop.Installer.InstallDir)`" INSTALLDIR1=`"$($ConfigurationData.ConfigData.Desktop.Installer.InstallDirPython)`" DESKTOP_CONFIG=`"$($ConfigurationData.ConfigData.Desktop.DesktopConfig)`" MODIFYFLEXDACL=`"$($ConfigurationData.ConfigData.Desktop.ModifyFlexdAcl)`""
-                    }else{
-                        $Arguments = "/qn ACCEPTEULA=YES INSTALLDIR=`"$($ConfigurationData.ConfigData.Desktop.Installer.InstallDir)`" INSTALLDIR1=`"$($ConfigurationData.ConfigData.Desktop.Installer.InstallDirPython)`" ESRI_LICENSE_HOST=`"$($ConfigurationData.ConfigData.Desktop.EsriLicenseHost)`" SOFTWARE_CLASS=`"$($ConfigurationData.ConfigData.Desktop.SoftwareClass)`" SEAT_PREFERENCE=`"$($ConfigurationData.ConfigData.Desktop.SeatPreference)`" DESKTOP_CONFIG=`"$($ConfigurationData.ConfigData.Desktop.DesktopConfig)`"  MODIFYFLEXDACL=`"$($ConfigurationData.ConfigData.Desktop.ModifyFlexdAcl)`""
-                    }
-
-                    if ($ConfigurationData.ConfigData.Desktop.BlockAddIns -match '^[0-4]+$') {
-                        $Arguments += " BLOCKADDINS=$($ConfigurationData.ConfigData.Desktop.BlockAddIns)" #ensure valid blockaddin value / defauts to allow all addins (0)
-                    }
-
-                    if(-not($ConfigurationData.ConfigData.Desktop.ContainsKey("EnableEUEI")) -or ($ConfigurationData.ConfigData.Desktop.ContainsKey("EnableEUEI") -and -not($ConfigurationData.ConfigData.Desktop.EnableEUEI))){
-						$Arguments += " ENABLEEUEI=0"
-                    }
-
-                    ArcGIS_Install DesktopInstall
-                    { 
-                        Name = "Desktop"
-                        Version = $ConfigurationData.ConfigData.DesktopVersion
-                        Path = $ConfigurationData.ConfigData.Desktop.Installer.Path
-                        Extract = if($ConfigurationData.ConfigData.Desktop.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.Desktop.Installer.IsSelfExtracting }else{ $True }
-                        FeatureSet = @( $ConfigurationData.ConfigData.Desktop.InstallFeatures )
-                        Arguments = $Arguments
-                        EnableMSILogging = $EnableMSILogging
-                        Ensure = "Present"
-                    }
-
-                    if($ConfigurationData.ConfigData.Desktop.Extensions){
-                        foreach ($Extension in $ConfigurationData.ConfigData.Desktop.Extensions.GetEnumerator()) 
-                        {
-                            $Arguments = "/qn"
-                            $DesktopExtensionFeatureSet = @()
-                            if($Extension.Value.Features -and $Extension.Value.Features.Count -gt 0){
-								if($Extension.Value.Features -icontains "ALL"){
-									$DesktopExtensionFeatureSet = @( "ALL" )
-								}else{
-									$Extension.Value.Features | % {
-										$DesktopExtensionFeatureSet += @( $_ )
-									}
-								}
-                            }else{
-                                $DesktopExtensionFeatureSet = $null
-                            }
-
-                            ArcGIS_Install "Desktop$($Extension.Key)InstallExtension"
-                            {
-                                Name = "Desktop$($Extension.Key)"
-                                Version = $ConfigurationData.ConfigData.DesktopVersion
-                                Path = $Extension.Value.Installer.Path
-                                Extract = if($Extension.Value.Installer.ContainsKey("IsSelfExtracting")){ $Extension.Value.Installer.IsSelfExtracting }else{ $True }
-                                Arguments = $Arguments
-                                FeatureSet = $DesktopExtensionFeatureSet
-                                EnableMSILogging = $EnableMSILogging
-                                Ensure = "Present"
-                            }
-                        }
-                    }
-
-                    if ($ConfigurationData.ConfigData.Desktop.Installer.PatchesDir -and -not($SkipPatchInstalls)) {
-                        ArcGIS_InstallPatch DesktopInstallPatch
-                        {
-                            Name = "Desktop"
-                            Version = $ConfigurationData.ConfigData.DesktopVersion
-                            DownloadPatches = if($ConfigurationData.ConfigData.DownloadPatches){ $ConfigurationData.ConfigData.DownloadPatches }else{ $False }
-                            PatchesDir = $ConfigurationData.ConfigData.Desktop.Installer.PatchesDir
-                            PatchInstallOrder = $ConfigurationData.ConfigData.Desktop.Installer.PatchInstallOrder
-                            Ensure = "Present"
-                        }
+                        #if(Test-Path $TempFolder){ Remove-Item -Path $TempFolder -Recurse }
                     }
                 }
                 'Pro'
@@ -666,15 +622,15 @@
                         Name = "Pro"
                         Version = $ConfigurationData.ConfigData.ProVersion
                         Path = $ConfigurationData.ConfigData.Pro.Installer.Path
-                        DotnetDesktopRuntimePath = if($ConfigurationData.ConfigData.ProVersion.Split(".")[0] -ge 3){ $ConfigurationData.ConfigData.Pro.Installer.DotnetDesktopRuntimePath }else{ $null }
-                        ProEdgeWebView2RuntimePath = if($ConfigurationData.ConfigData.ProVersion.Split(".")[0] -ge 3 -and $ConfigurationData.ConfigData.ProVersion.Split(".")[1] -ge 3){ $ConfigurationData.ConfigData.Pro.Installer.EdgeWebView2RuntimePath }else{ $null }
+                        DotnetDesktopRuntimePath = if([version]($ConfigurationData.ConfigData.ConfigData) -ge "3.0"){ $ConfigurationData.ConfigData.Pro.Installer.DotnetDesktopRuntimePath }else{ $null }
+                        ProEdgeWebView2RuntimePath = if([version]($ConfigurationData.ConfigData.ConfigData) -ge "3.3"){ $ConfigurationData.ConfigData.Pro.Installer.EdgeWebView2RuntimePath }else{ $null }
                         Extract = if($ConfigurationData.ConfigData.Pro.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.Pro.Installer.IsSelfExtracting }else{ $True }
                         Arguments = $Arguments
                         EnableMSILogging = $EnableMSILogging
                         Ensure = "Present"
-                        PsDscRunAsCredential = if($ConfigurationData.ConfigData.ProVersion -ieq "3.0"){ $ServiceCredential }else{$null}
                     }    
                     
+                    $ProDependsOn = @("[ArcGIS_Install]ProInstall")
                     if($ConfigurationData.ConfigData.Pro.Extensions){
                         foreach ($Extension in $ConfigurationData.ConfigData.Pro.Extensions.GetEnumerator()) 
                         {
@@ -702,7 +658,9 @@
                                 FeatureSet = $ProExtensionFeatureSet
                                 EnableMSILogging = $EnableMSILogging
                                 Ensure = "Present"
+                                DependsOn = $ProDependsOn  
                             }
+                            $ProDependsOn += "[ArcGIS_Install]Pro$($Extension.Key)InstallExtension"
                         }
                     }
 
@@ -715,6 +673,7 @@
                             PatchesDir = $ConfigurationData.ConfigData.Pro.Installer.PatchesDir
                             PatchInstallOrder = $ConfigurationData.ConfigData.Pro.Installer.PatchInstallOrder
                             Ensure = "Present"
+                            DependsOn = $ProDependsOn
                         }
                     }
                 }
@@ -741,6 +700,7 @@
                         Profile               = ("Domain","Private","Public")
                         LocalPort             = ("27000")
                         Protocol              = "TCP"
+                        DependsOn             = @("[ArcGIS_Install]LicenseManagerInstall")
                     }
                 }
             }

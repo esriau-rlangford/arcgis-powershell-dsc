@@ -2,7 +2,7 @@
     param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0",
+        $Version = "12.1",
 
         [System.Management.Automation.PSCredential]
         $ServiceCredential,
@@ -28,8 +28,8 @@
     Import-DSCResource -ModuleName ArcGIS
     Import-DscResource -Name ArcGIS_Install
     Import-DscResource -Name ArcGIS_xFirewall
+    Import-DscResource -Name ArcGIS_AzureSetupsManager
     Import-DscResource -Name ArcGIS_WindowsService
-    Import-DscResource -Name ArcGIS_AzureSetupDownloadsFolderManager
     
     $UpgradeSetupsStagingPath = "C:\ArcGIS\Deployment\Downloads\$($Version)"
     Node localhost {
@@ -40,12 +40,12 @@
             RebootNodeIfNeeded = $false
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager CleanupDownloadsFolder{
+        ArcGIS_AzureSetupsManager CleanupDownloadsFolder{
             Version = $Version
             OperationType = 'CleanupDownloadsFolder'
             ComponentNames = "All"
         }
-        $Depends = @("[ArcGIS_AzureSetupDownloadsFolderManager]CleanupDownloadsFolder")
+        $Depends = @("[ArcGIS_AzureSetupsManager]CleanupDownloadsFolder")
 
         if($HasRelationalDataStore){
             ArcGIS_xFirewall MemoryCache_DataStore_FirewallRules
@@ -62,7 +62,7 @@
             }
         }
         
-        ArcGIS_AzureSetupDownloadsFolderManager DownloadDataStoreUpgradeSetup{
+        ArcGIS_AzureSetupsManager DownloadDataStoreUpgradeSetup{
             Version = $Version
             OperationType = 'DownloadUpgradeSetups'
             ComponentNames = "DataStore"
@@ -70,11 +70,11 @@
             UpgradeSetupsSourceFileShareCredentials = $FileshareMachineCredential
             DependsOn = $Depends
         }
-        $Depends += '[ArcGIS_AzureSetupDownloadsFolderManager]DownloadDataStoreUpgradeSetup'
+        $Depends += '[ArcGIS_AzureSetupsManager]DownloadDataStoreUpgradeSetup'
 
         $InstallerPathOnMachine = "$($UpgradeSetupsStagingPath)\DataStore.exe"
         $InstallerVolumePathOnMachine = "$($UpgradeSetupsStagingPath)\DataStore.exe.001"
-        #ArcGIS Data Store 10.3 or 10.3.1, you must manually provide this account full control to your ArcGIS Data Store content directory 
+        
         ArcGIS_Install DataStoreUpgrade{
             Name = "DataStore"
             Version = $Version
@@ -101,7 +101,7 @@
                 }
 			}
 			TestScript = { -not(Test-Path $using:InstallerPathOnMachine) -and -not(Test-Path $using:InstallerVolumePathOnMachine)  }
-			GetScript = { $null }          
+			GetScript = { @{} }          
 		}    
         $Depends += '[Script]RemoveDataStoreInstaller'
 

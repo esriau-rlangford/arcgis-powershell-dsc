@@ -5,6 +5,10 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
+
 <#
     .SYNOPSIS
         Makes a request to the installed Server to create a New Server Site or Join it to an existing Server Site
@@ -21,9 +25,7 @@ Import-Module -Name (Join-Path -Path $modulePath `
     .PARAMETER SiteAdministrator
         A MSFT_Credential Object - Primary Site Administrator for the Server
     .PARAMETER WebSocketContextUrl
-        WebSocket Url for GeoEvent Server
-    .PARAMETER SiteAdminUrl
-        Server Site Admin URL 
+        WebSocket Url for GeoEvent Server    
 
 #>
 function Get-TargetResource
@@ -45,7 +47,7 @@ function Get-TargetResource
 		$Name
 	)
 
-	$null
+	@{}
 }
 
 function Set-TargetResource
@@ -73,11 +75,7 @@ function Set-TargetResource
 		[System.String]
 		$WebSocketContextUrl,
 
-        [parameter(Mandatory = $false)]
-		[System.String]
-		$SiteAdminUrl,
-
-		[ValidateSet("Present","Absent")]
+        [ValidateSet("Present","Absent")]
 		[System.String]
 		$Ensure
 	)
@@ -87,32 +85,16 @@ function Set-TargetResource
     $GatewayServiceName = 'ArcGISGeoEventGateway'
     if($Ensure -ieq 'Present') {
         Write-Verbose "Stopping the service '$ServiceName'"    
-        Stop-Service -Name $ServiceName -ErrorAction Ignore    
-        Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped'
+        Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped' -Verbose
         
 		$FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
-		$ServerUrl = "https://$($FQDN):6443"   
-		$Referer = $ServerUrl
-		Wait-ForUrl -Url "$ServerUrl/arcgis/admin" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5
-		$token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer 
-
-        if($SiteAdminUrl) {
-            $machineProps = Get-ArcGISMachineProperties -ServerHostName $FQDN -MachineName $FQDN -SiteName 'arcgis' -Token $token.token -Referer $Referer 
-            if($machineProps.adminURL -ine $SiteAdminUrl) {
-                Write-Verbose "Configured AdminUrl '$($machineProps.adminURL)' does not match expected value of '$SiteAdminUrl'. Updating it"
-                $machineProps.adminURL = $SiteAdminUrl
-                try{ 
-                    Set-ArcGISMachineProperties -ServerHostName $FQDN -MachineName $FQDN -SiteName 'arcgis' -Token $token.token -Referer $Referer -MachineProperties $machineProps
-                }catch {
-                    Write-Verbose "[WARNING]:- Set-ArcGISMachineProperties applied. Operation typically causes a restart and does not return a response"
-                }
-                Write-Verbose "Updated the AdminUrl. Wait for Server to return (if it restarts)"
-                Wait-ForUrl -Url "$ServerUrl/arcgis/admin" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5
-            }
-        }
-
+		$ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+		$Referer = 'https://localhost'
+		Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5
+		$token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer 
         Write-Verbose "Checking if WebSocketContextURL in sys props is $WebSocketContextUrl"
-        $sysProps = Get-ArcGISAdminSystemProperties -ServerHostName $FQDN -SiteName 'arcgis' -Referer $Referer -Token $token.token
+        
+        $sysProps = Get-SystemProperties -URL $ServerBaseUrl -Token $token.token -Referer $Referer
         if($sysProps.WebSocketContextURL -ine $WebSocketContextUrl) {
             Write-Verbose "Current Value of WebSocketContextURL in sys props is '$($sysProps.WebSocketContextURL)' and does not match '$WebSocketContextUrl'. Setting it"
             if(-not($sysProps)) { $sysProps = @{} }
@@ -121,13 +103,12 @@ function Set-TargetResource
 			}else {
                 $sysProps.WebSocketContextURL = $WebSocketContextUrl
             }
-            $setResponse = Set-ArcGISAdminSystemProperties -ServerHostName $FQDN -SiteName 'arcgis' -Token $token.token -Referer $Referer -Properties $sysProps
+            $setResponse = Set-SystemProperties -URL $ServerBaseUrl -Token $token.token -Referer $Referer -Properties $sysProps
             Write-Verbose "Response from Set Properties:- $setResponse"
         }
        
         Write-Verbose "Starting the service '$ServiceName'"    
-		Start-Service -Name $ServiceName -ErrorAction Ignore       
-        Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Running' -Verbose
+		Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Running' -Verbose
         Write-Verbose "Starting Sleep - 60 Seconds"
         Start-Sleep -Seconds 60
         Write-Verbose "Ended Sleep - 60 Seconds"
@@ -135,7 +116,6 @@ function Set-TargetResource
         Write-Warning 'Absent not implemented'
     }
 }
-
 
 function Test-TargetResource
 {
@@ -163,11 +143,7 @@ function Test-TargetResource
 		[System.String]
 		$WebSocketContextUrl,
 
-        [parameter(Mandatory = $false)]
-		[System.String]
-		$SiteAdminUrl,
-
-		[ValidateSet("Present","Absent")]
+        [ValidateSet("Present","Absent")]
 		[System.String]
 		$Ensure
 	)
@@ -180,24 +156,16 @@ function Test-TargetResource
     
     if($result) {
         $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
-		$ServerUrl = "https://$($FQDN):6443"   
-		$Referer = $ServerUrl
-		Wait-ForUrl -Url "$ServerUrl/arcgis/admin" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5
-		$token = Get-ServerToken -ServerEndPoint $ServerUrl -ServerSiteName 'arcgis' -Credential $SiteAdministrator -Referer $Referer 
-
+        $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+		$Referer = 'https://localhost'
+        Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server" -MaxWaitTimeInSeconds 90 -SleepTimeInSeconds 5
+		
+        $token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer
         Write-Verbose "Checking if WebSocketContextURL in sys props is $WebSocketContextUrl"
-        $sysProps = Get-ArcGISAdminSystemProperties -ServerHostName $FQDN -SiteName 'arcgis' -Referer $Referer -Token $token.token
+        $sysProps = Get-SystemProperties -URL $ServerBaseUrl -Token $token.token -Referer $Referer
         if($sysProps.WebSocketContextURL -ine $WebSocketContextUrl) {
             Write-Verbose "Current Value of WebSocketContextURL in sys props is '$($sysProps.WebSocketContextURL)'"
             $result = $false
-        }
-
-        if($result -and $SiteAdminUrl) {
-            $machineProps = Get-ArcGISMachineProperties -ServerHostName $FQDN -MachineName $FQDN -SiteName 'arcgis' -Token $token.token -Referer $Referer 
-            if($machineProps.adminURL -ine $SiteAdminUrl) {
-                Write-Verbose "Configured AdminUrl '$($machineProps.adminURL)' does not match expected value of '$SiteAdminUrl'"
-                $result = $false
-            }
         }
     }
 
@@ -209,144 +177,4 @@ function Test-TargetResource
     }
 }
 
-function Get-ArcGISMachineProperties
-{
-    [CmdletBinding()]
-    param(
-    [System.String]
-        [Parameter(Mandatory=$true)]
-        $ServerHostName,
-
-        [Parameter(Mandatory=$true)]
-        $MachineName,
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $SiteName = 'arcgis',
-
-        [System.String]
-        [Parameter(Mandatory=$true)]
-        $Token,        
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
-                
-        [System.Int32]
-        [Parameter(Mandatory=$false)]
-        $ServerPort = 6443
-    )
-
-    $Scheme = if($ServerPort -eq 6080 -or $ServerPort -eq 80) { 'http' } else { 'https' }
-    Invoke-ArcGISWebRequest -Url ("$($Scheme)://$($ServerHostName):$($ServerPort)/$SiteName" + '/admin/machines/' + $MachineName + '/') -HttpFormParameters @{ f = 'json'; token = $Token } -Referer $Referer
-}
-
-function Set-ArcGISMachineProperties
-{
-    [CmdletBinding()]
-    param(
-    [System.String]
-        [Parameter(Mandatory=$true)]
-        $ServerHostName,
-
-        [Parameter(Mandatory=$true)]
-        $MachineName,
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $SiteName = 'arcgis',
-
-        [System.String]
-        [Parameter(Mandatory=$true)]
-        $Token,        
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
-                
-        [System.Int32]
-        [Parameter(Mandatory=$false)]
-        $ServerPort = 6443,
-
-        [Parameter(Mandatory=$true)]
-        $MachineProperties
-    )
-    $Props = @{ 
-                machineName = $MachineProperties.machineName
-                adminURL = $MachineProperties.adminURL
-                webServerMaxHeapSize = $MachineProperties.webServerMaxHeapSize
-                webServerCertificateAlias = $MachineProperties.webServerCertificateAlias
-                appServerMaxHeapSize = $MachineProperties.appServerMaxHeapSize
-                socMaxHeapSize = $MachineProperties.socMaxHeapSize
-                OpenEJBPort = $MachineProperties.ports.OpenEJBPort
-                JMXPort = $MachineProperties.ports.JMXPort
-                NamingPort = $MachineProperties.ports.NamingPort
-                DerbyPort = $MachineProperties.ports.DerbyPort
-                f = 'json'
-                token = $Token
-              }   
-              $Scheme = if($ServerPort -eq 6080 -or $ServerPort -eq 80) { 'http' } else { 'https' }
-   Invoke-ArcGISWebRequest -Url ("$($Scheme)://$($ServerHostName):$($ServerPort)/$SiteName" + '/admin/machines/' + $MachineName + '/edit') -HttpFormParameters $Props -Referer $Referer -HttpMethod 'POST' 
-}
-
-function Get-ArcGISAdminSystemProperties
-{
-    [CmdletBinding()]
-    param(
-    [System.String]
-        [Parameter(Mandatory=$true)]
-        $ServerHostName,
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $SiteName = 'arcgis',
-
-        [System.String]
-        [Parameter(Mandatory=$true)]
-        $Token,        
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
-                
-        [System.Int32]
-        [Parameter(Mandatory=$false)]
-        $ServerPort = 6443
-    )
-    $Scheme = if($ServerPort -eq 6080 -or $ServerPort -eq 80) { 'http' } else { 'https' }
-   Invoke-ArcGISWebRequest -Url ("$($Scheme)://$($ServerHostName):$($ServerPort)/$SiteName" + '/admin/system/properties/') -HttpFormParameters @{ f = 'json'; token = $Token } -Referer $Referer
-}
-
-function Set-ArcGISAdminSystemProperties
-{
-    [CmdletBinding()]
-    param(
-    [System.String]
-        [Parameter(Mandatory=$true)]
-        $ServerHostName,
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $SiteName = 'arcgis',
-
-        [System.String]
-        [Parameter(Mandatory=$true)]
-        $Token,        
-
-        [System.String]
-        [Parameter(Mandatory=$false)]
-        $Referer = 'http://localhost',
-                
-        [System.Int32]
-        [Parameter(Mandatory=$false)]
-        $ServerPort = 6443,
-
-        [Parameter(Mandatory=$true)]
-        $Properties
-    )
-    $Scheme = if($ServerPort -eq 6080 -or $ServerPort -eq 80) { 'http' } else { 'https' }
-   Invoke-ArcGISWebRequest -Url ("$($Scheme)://$($ServerHostName):$($ServerPort)/$SiteName" + '/admin/system/properties/update') -HttpFormParameters @{ f = 'json'; token = $Token; properties = (ConvertTo-Json $Properties -Depth 5) } -Referer $Referer
-}
-
 Export-ModuleMember -Function *-TargetResource
-

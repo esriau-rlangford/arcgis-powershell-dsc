@@ -40,7 +40,7 @@ function Get-TargetResource
 		$CertificatePassword
 	)
 
-	$null
+	@{}
 }
 
 

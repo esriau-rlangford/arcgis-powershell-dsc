@@ -1,4 +1,3 @@
-﻿
 [ClassVersion("1.0.0"),FriendlyName("ArcGIS_WindowsService")] 
 class ArcGIS_WindowsService : OMI_BaseResource
 {

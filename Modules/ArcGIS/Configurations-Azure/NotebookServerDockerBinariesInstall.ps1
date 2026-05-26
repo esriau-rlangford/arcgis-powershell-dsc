@@ -3,7 +3,7 @@ Configuration NotebookServerDockerBinariesInstall
     param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0"
+        $Version = "12.1"
 
         ,[Parameter(Mandatory=$true)]
         [ValidateNotNullOrEmpty()]
@@ -21,6 +21,10 @@ Configuration NotebookServerDockerBinariesInstall
         ,[Parameter(Mandatory=$false)]
         [System.Boolean]
         $ServiceCredentialIsDomainAccount
+
+        ,[Parameter(Mandatory=$false)]
+        [System.Boolean]
+        $IsSingleTier
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration 
@@ -67,13 +71,17 @@ Configuration NotebookServerDockerBinariesInstall
 
         $NBAdditionFilesPath = "C:\\ArcGIS\\Deployment\\Downloads\\NotebookServer\\AdditionalFiles"
         if(Test-Path $NBAdditionFilesPath){
-            $containerPath = Get-ChildItem -Path $NBAdditionFilesPath -Filter "*arcgis-notebook-python-windows-$($Version)*" -Recurse | Select-Object -ExpandProperty FullName
+            $containerPath = Get-ChildItem -Path $NBAdditionFilesPath -Filter "ArcGIS_Notebook_Windows_Container_Image_*" -Recurse | Select-Object -ExpandProperty FullName
+            if(-not($containerPath)){
+                $containerPath = Get-ChildItem -Path $NBAdditionFilesPath -Filter "*arcgis-notebook-python-windows-$($Version)*" -Recurse | Select-Object -ExpandProperty FullName
+            }
             if(-not([string]::IsNullOrEmpty($containerPath))){
                 ArcGIS_NotebookPostInstall NotebookPostInstall {
                     SiteName            = $Context
                     ContainerImagePaths = @($containerPath) # Add the path to the container images
                     ExtractSamples      = $false
                     DependsOn           = @("[ArcGIS_PendingReboot]PendingRebootAfterDockerInstall")
+                    ForceRestart        = $IsSingleTier
                     PsDscRunAsCredential  = $ServiceCredential # Copy as arcgis account which has access to this share
                 }
             }

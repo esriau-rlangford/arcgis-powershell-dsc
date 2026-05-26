@@ -42,7 +42,7 @@
     )
     
     Import-DscResource -ModuleName PSDesiredStateConfiguration 
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_Install, ArcGIS_InstallPatch, ArcGIS_xFirewall
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_Install, ArcGIS_InstallPatch, ArcGIS_xFirewall
     
     Node $AllNodes.NodeName {
 
@@ -53,17 +53,16 @@
             }
         }
         
-        $VersionArray = $Version.Split(".")
         $Depends = @()
         #$NodeName = $Node.NodeName
-        #ArcGIS Data Store 10.3 or 10.3.1, you must manually provide this account full control to your ArcGIS Data Store content directory 
+        
         ArcGIS_Install DataStoreUpgrade
         { 
             Name = "DataStore"
             Version = $Version
             Path = $InstallerPath
             Extract = $InstallerIsSelfExtracting
-            Arguments = if($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -or $VersionArray[1] -gt 8)){ "/qn ACCEPTEULA=YES"}else{ "/qn" }
+            Arguments = "/qn ACCEPTEULA=YES"
             ServiceCredential = $ServiceAccount
             ServiceCredentialIsDomainAccount =  $IsServiceAccountDomainAccount
             ServiceCredentialIsMSA = $IsServiceAccountMSA
@@ -93,7 +92,7 @@
             DependsOn = $Depends
         }
 
-        if(($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -or $VersionArray[1] -gt 7)) -and $Node.HasMultiMachineTileCache){
+        if($Node.HasMultiMachineTileCache){
             ArcGIS_xFirewall MultiMachine_TileCache_DataStore_FirewallRules
             {
                 Name                  = "ArcGISMultiMachineTileCacheDataStore" 
@@ -121,20 +120,78 @@
                 Protocol              = "TCP" 
             } 
         }
-    }
+    
+    
+        if($Node.HasRelationalStore){
+            if([version]$Version -ge "11.0"){
+                ArcGIS_xFirewall Queue_DataStore_FirewallRules
+                {
+                    Name                  = "ArcGISQueueDataStore-Out" 
+                    DisplayName           = "ArcGIS Queue Data Store Out" 
+                    DisplayGroup          = "ArcGIS Data Store" 
+                    Ensure                = 'Present'  
+                    Access                = "Allow" 
+                    State                 = "Enabled" 
+                    Profile               = ("Domain","Private","Public")
+                    LocalPort             = ("45671","45672")                      
+                    Protocol              = "TCP" 
+                }
+            }
 
-    if(($VersionArray[0] -gt 11 -or $Version -ieq "11.5") -and $Node.HasRelationalStore){
-        ArcGIS_xFirewall MemoryCache_DataStore_FirewallRules
-        {
-            Name                  = "ArcGISMemoryCacheDataStore" 
-            DisplayName           = "ArcGIS Memory Cache Data Store" 
-            DisplayGroup          = "ArcGIS Data Store" 
-            Ensure                = 'Present'  
-            Access                = "Allow" 
-            State                 = "Enabled" 
-            Profile               = ("Domain","Private","Public")
-            LocalPort             = ("9820","9840","9850")
-            Protocol              = "TCP" 
-        } 
+            if([version]$Version -ge "11.5"){
+                ArcGIS_xFirewall MemoryCache_DataStore_FirewallRules
+                {
+                    Name                  = "ArcGISMemoryCacheDataStore" 
+                    DisplayName           = "ArcGIS Memory Cache Data Store" 
+                    DisplayGroup          = "ArcGIS Data Store" 
+                    Ensure                = 'Present'  
+                    Access                = "Allow" 
+                    State                 = "Enabled" 
+                    Profile               = ("Domain","Private","Public")
+                    LocalPort             = ("9820","9840","9850")
+                    Protocol              = "TCP" 
+                } 
+            }
+        }
+
+        if($Node.HasObjectStore){
+            $ObjectStoreServerPorts = @("29879", "19879")
+            if([version]$Version -ge "11.5"){
+                $ObjectStoreServerPorts = @("29879", "29879")
+            }
+
+            ArcGIS_xFirewall ObjectDataStore_FirewallRules
+            {
+                Name                  = "ArcGISObjectDataStore" 
+                DisplayName           = "ArcGIS Object Data Store" 
+                DisplayGroup          = "ArcGIS Object Data Store" 
+                Ensure                = 'Present'
+                Access                = "Allow" 
+                State                 = "Enabled" 
+                Profile               = ("Domain","Private","Public")
+                LocalPort             = $ObjectStoreServerPorts                      
+                Protocol              = "TCP" 
+            }
+
+            if($Node.HasMultiMachineObjectStore){
+                $ObjectStorePorts = @("9820", "9830", "9840", "9880", "29874", "29876", "29882","29875","29877","29883","29860-29863","29858","29859")
+                if([version]$Version -ge "11.5"){
+                    $ObjectStorePorts = @("29860-29863","19864","29858","29859","28981","29895","9856", "9857", "9872", "9886", "9894")
+                }
+
+                ArcGIS_xFirewall ObjectDataStore_MultiMachine_FirewallRules
+                {
+                    Name                  = "ArcGISObjectMultiMachineDataStore" 
+                    DisplayName           = "ArcGIS Object Multi Machine Data Store" 
+                    DisplayGroup          = "ArcGIS Object Multi Machine Data Store" 
+                    Ensure                = 'Present'
+                    Access                = "Allow" 
+                    State                 = "Enabled" 
+                    Profile               = ("Domain","Private","Public")
+                    LocalPort             = $ObjectStorePorts
+                    Protocol              = "TCP" 
+                }
+            }
+        }
     }
 }

@@ -39,7 +39,7 @@
         Script SetMixedModeAuthentication
 		{
 			GetScript = {
-				$null
+				@{}
 			}
 			TestScript = 
 			{                    
@@ -55,16 +55,14 @@
 				$s = new-object ('Microsoft.SqlServer.Management.Smo.Server') "$env:ComputerName"
 				$s.Settings.LoginMode = [Microsoft.SqlServer.Management.SMO.ServerLoginMode]::Mixed
 				$s.Alter()
-				Stop-Service -Name 'MSSQLSERVER' -Force
-				Start-Sleep -Seconds 5
-				Start-Service -Name 'MSSQLSERVER'
+                Restart-ArcGISService -ServiceName 'MSSQLSERVER' -Verbose
 			}
 		}
 
         Script CreateDatabaseAdminUser
         {
             GetScript = {
-                $null
+                @{}
             }
             TestScript = 
             {                    

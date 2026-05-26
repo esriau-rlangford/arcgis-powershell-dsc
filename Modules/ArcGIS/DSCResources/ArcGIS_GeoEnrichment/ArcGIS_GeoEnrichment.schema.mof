@@ -1,0 +1,11 @@
+﻿
+[ClassVersion("1.0.0.0"), FriendlyName("ArcGIS_GeoEnrichment")]
+class ArcGIS_GeoEnrichment : OMI_BaseResource
+{
+	[Key] String Version;
+	[Key, ValueMap{"Create","Repair","Upgrade","Remove"}, Values{"Create","Repair","Upgrade","Remove"}] String Mode;
+	[Write, EmbeddedInstance("MSFT_Credential")] String PortalSiteAdministrator;	
+	[Write] String DataStoreDataDirectory;
+	[Write] Boolean RegisterGeoEnrichmentAsPortalUtilityService;
+};
+

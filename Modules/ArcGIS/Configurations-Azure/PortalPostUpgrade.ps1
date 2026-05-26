@@ -29,6 +29,7 @@
 	Import-DscResource -ModuleName PSDesiredStateConfiguration 
     Import-DSCResource -ModuleName ArcGIS
     Import-DscResource -Name ArcGIS_PortalUpgrade 
+    Import-DscResource -Name ArcGIS_RemoteFile
 
     Node localhost {
         LocalConfigurationManager
@@ -38,10 +39,18 @@
             RebootNodeIfNeeded = $false
         }
 
+        $DependsOn = @()
         if($PortalLicenseFileName) {
-            $PortalLicenseFileUrl = "$($DeploymentArtifactCredentials.UserName)/$($PortalLicenseFileName)$($DeploymentArtifactCredentials.GetNetworkCredential().Password)"
-            Invoke-WebRequest -Verbose:$False -OutFile $PortalLicenseFileName -Uri $PortalLicenseFileUrl -UseBasicParsing -ErrorAction Ignore
-        }  
+            ArcGIS_RemoteFile "PortalLicenseFileDownload"
+            {
+                Source = $PortalLicenseFileName
+                Destination = (Join-Path $(Get-Location).Path $PortalLicenseFileName)
+                FileSourceType = "AzureSASUri"
+                Credential = $DeploymentArtifactCredentials
+                Ensure = 'Present'
+            }
+            $DependsOn += '[ArcGIS_RemoteFile]PortalLicenseFileDownload'
+        }
 
         ArcGIS_PortalUpgrade PortalUpgrade
         {
@@ -51,6 +60,7 @@
             Version = $Version
             ImportExternalPublicCertAsRoot = $True
             EnableUpgradeSiteDebug = $DebugMode
+            DependsOn = $DependsOn
         }
     }
 }

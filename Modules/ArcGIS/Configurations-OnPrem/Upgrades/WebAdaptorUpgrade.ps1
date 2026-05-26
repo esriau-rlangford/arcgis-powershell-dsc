@@ -67,7 +67,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration 
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_Install, ArcGIS_InstallPatch, ArcGIS_WebAdaptor, ArcGIS_Tomcat
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_Install, ArcGIS_InstallPatch, ArcGIS_WebAdaptor, ArcGIS_Tomcat
 
 
     Node $AllNodes.NodeName {
@@ -78,7 +78,6 @@
             }
         }
 
-        $VersionArray = $Version.Split('.')
         $Depends = $null
         if($IsJavaWebAdaptor){
             $LastWAName = ""
@@ -86,7 +85,7 @@
                 if($WA.Role -ieq $WebAdaptorRole){
                     $LastWAName = "UnregisterWebAdaptor$($Node.NodeName)-$($WA.Context)"
                     # AdminAccessEnabled flag is not honored from version 11.5 onwards. Defaulting it to True
-                    $WAAdminAccessEnabled = if((@("11.5","12.0") -icontains $Version)) {$true} else {$WA.AdminAccessEnabled}
+                    $WAAdminAccessEnabled = if([version]$Version -ge "11.5") {$true} else {$WA.AdminAccessEnabled}
                     ArcGIS_WebAdaptor $LastWAName
                     {
                         Version             = $OldVersion
@@ -183,11 +182,7 @@
                         DependsOn = if($Depends){$Depends}else{$null}
                     }
 
-                    $VersionArray = $Version.Split(".")
-                    $WAArguments = "/qn ACCEPTEULA=YES VDIRNAME=$($WA.Context) WEBSITE_ID=$($WA.WebSiteId)"
-                    if($VersionArray[0] -gt 10 -or ($VersionArray[0] -eq 10 -and $VersionArray[1] -gt 8)){
-                        $WAArguments += " CONFIGUREIIS=TRUE"
-                    }
+                    $WAArguments = "/qn ACCEPTEULA=YES VDIRNAME=$($WA.Context) WEBSITE_ID=$($WA.WebSiteId) CONFIGUREIIS=TRUE"
                     
                     $WAName = "WebAdaptorIIS-$($WA.Role)-$($WA.Context)"
                     ArcGIS_Install "$($WAName)Install"
@@ -224,7 +219,7 @@
 
         foreach($WA in $Node.WebAdaptorConfig){
             if($WA.Role -ieq $WebAdaptorRole){
-                $WAAdminAccessEnabled = if((@("11.5","12.0") -icontains $Version)) {$true} else {$WA.AdminAccessEnabled}
+                $WAAdminAccessEnabled = if([version]$Version -ge "11.5") {$true} else {$WA.AdminAccessEnabled}
                 ArcGIS_WebAdaptor "ConfigureWebAdaptor$($Node.NodeName)-$($WA.Context)"
                 {
                     Version             = $Version

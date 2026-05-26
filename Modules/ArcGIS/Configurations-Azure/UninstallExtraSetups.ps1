@@ -2,7 +2,7 @@ Configuration UninstallExtraSetups {
     param(
         [Parameter(Mandatory = $false)]
         [System.String]
-        $Version = "12.0",
+        $Version = "12.1",
 
         [Parameter(Mandatory = $false)]
         [System.String]
@@ -36,6 +36,16 @@ Configuration UninstallExtraSetups {
             $FoldersToDelete += @("C:\\ArcGIS\\Server\\WorkflowManager")
         }
 
+        if(-not($MachineRolesArray -iContains "Server") -or $ServerRole -ine "RealityServer"){
+            ArcGIS_Install RealityServerUninstall {
+                Name    = "RealityServer"
+                Version = $Version
+                Ensure  = "Absent"
+            }
+
+            $FoldersToDelete += @("C:\\ArcGIS\\Server\\RealityServer")
+        }
+
         if(-not($MachineRolesArray -iContains "Server") -or $ServerRole -ine "GeoEventServer"){
             ArcGIS_Install GeoEventServerUninstall {
                 Name    = "GeoEvent"
@@ -45,7 +55,7 @@ Configuration UninstallExtraSetups {
             $FoldersToDelete += @("C:\\ArcGIS\\Server\\GeoEvent")
         }
         
-        if(-not($MachineRolesArray -iContains "Server") -or (@("NotebookServer", "MissionServer", "VideoServer") -iContains $ServerRole)){
+        if(-not($MachineRolesArray -iContains "Server") -or (@("NotebookServer", "MissionServer", "VideoServer","DataPipelinesServer") -iContains $ServerRole)){
             ArcGIS_Install ServerUninstall {
                 Name = "Server"
                 Version = $Version
@@ -73,6 +83,16 @@ Configuration UninstallExtraSetups {
             }
 
             $FoldersToDelete += @("C:\\ArcGIS\\Video","C:\\arcgisvideoserver")
+        }
+
+        if(-not($MachineRolesArray -iContains "Server") -or $ServerRole -ine "DataPipelinesServer"){
+            ArcGIS_Install DataPipelinesServerUninstall {
+                Name = "DataPipelinesServer"
+                Version = $Version
+                Ensure = "Absent"
+            }
+
+            $FoldersToDelete += @("C:\\ArcGIS\\DataPipelines","C:\\datapipelinesserver")
         }
             
         if(-not($MachineRolesArray -iContains "Server") -or $ServerRole -ine "NotebookServer"){
@@ -115,7 +135,7 @@ Configuration UninstallExtraSetups {
             $FoldersToDelete += @("C:\\ArcGIS\\DataStore")
         }
 
-        ArcGIS_AzureSetupDownloadsFolderManager CleanupDownloadsFolder{
+        ArcGIS_AzureSetupsManager CleanupDownloadsFolder{
             Version = $Version
             OperationType = 'CleanupDownloadsFolder'
             ComponentNames = if($MachineRolesArray -iContains "Server" -and $ServerRole -ieq "NotebookServer"){ "NotebookServer" }else{ "All" }

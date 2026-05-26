@@ -6,7 +6,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_License
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_License
 
     Node $AllNodes.NodeName 
     {
@@ -23,15 +23,24 @@
             {
                 'Server'
                 {
-                    if($Node.ServerRole -ine "GeoEvent" -and $Node.ServerRole -ine "WorkflowManagerServer" -and $Node.ServerLicenseFilePath){
+                    if(-not(@("GeoEvent", "WorkflowManagerServer", "RealityServer") -icontains $Node.ServerRole) -and $Node.ServerLicenseFilePath){
+                        $AdditionalServerRoles = $null
+                        if($Node.ServerRole -ieq "GeneralPurposeServer" -and $Node.AdditionalServerRoles){
+                            $AdditionalServerRoles = ($Node.AdditionalServerRoles | Where-Object {-not(@('GeoEvent','NotebookServer','MissionServer','VideoServer','DataPipelinesServer','RealityServer') -icontains $_) })
+                            if($AdditionalServerRoles.Count -eq 0){
+                                $AdditionalServerRoles = $null
+                            } 
+                        }
+
                         ArcGIS_License "ServerLicense$($Node.NodeName)"
                         {
                             LicenseFilePath =  $Node.ServerLicenseFilePath
                             LicensePassword = $Node.ServerLicensePassword
+                            Version = $Node.Version
                             Ensure = "Present"
                             Component = 'Server'
                             ServerRole = $Node.ServerRole
-                            AdditionalServerRoles = if($Node.ServerRole -ieq "GeneralPurposeServer" -and $Node.AdditionalServerRoles){ if(($Node.AdditionalServerRoles | Where-Object {$_ -ine 'GeoEvent' -and $_ -ine 'NotebookServer' -and $_ -ine 'WorkflowManagerServer' -and $_ -ine 'MissionServer' -and $_ -ine 'VideoServer'}).Count -gt 0){$Node.AdditionalServerRoles | Where-Object {$_ -ine 'GeoEvent' -and $_ -ine 'NotebookServer' -and $_ -ine 'WorkflowManagerServer' -and $_ -ine 'MissionServer' -and $_ -ine 'VideoServer'}}else{$null} }else{ $null }
+                            AdditionalServerRoles = $AdditionalServerRoles
                             Force = $ForceLicenseUpdate
                         }
                     }
@@ -41,6 +50,7 @@
                         {
                             LicenseFilePath = $Node.GeoeventServerLicenseFilePath
                             LicensePassword = $Node.GeoeventServerLicensePassword
+                            Version = $Node.Version
                             Ensure = "Present"
                             Component = 'Server'
                             ServerRole = "GeoEvent"
@@ -53,34 +63,25 @@
                         {
                             LicenseFilePath =  $Node.WorkflowManagerServerLicenseFilePath
                             LicensePassword = $Node.WorkflowManagerServerLicensePassword
+                            Version = $Node.Version
                             Ensure = "Present"
                             Component = 'Server'
                             ServerRole = "WorkflowManagerServer"
                             Force = $ForceLicenseUpdate
                         }
                     }
-                }
-                'Portal'
-                {
-                    ArcGIS_License "PortalLicense$($Node.NodeName)"
-                    {
-                        LicenseFilePath = $Node.PortalLicenseFilePath
-                        LicensePassword = $Node.PortalLicensePassword
-                        Ensure = "Present"
-                        Component = 'Portal'
-                        Force = $ForceLicenseUpdate
-                    }                    
-                }
-                'Desktop'
-                {
-                    ArcGIS_License "DesktopLicense$($Node.NodeName)"
-                    {
-                        LicenseFilePath =  $Node.DesktopLicenseFilePath
-                        LicensePassword = $null
-                        IsSingleUse = $True
-                        Ensure = "Present"
-                        Component = 'Desktop'
-                        Force = $ForceLicenseUpdate
+
+                    if($Node.ServerRole -ieq "RealityServer" -and $Node.RealityServerLicenseFilePath){
+                        ArcGIS_License "RealityServerLicense$($Node.NodeName)"
+                        {
+                            LicenseFilePath =  $Node.RealityServerLicenseFilePath
+                            LicensePassword = $Node.RealityServerLicensePassword
+                            Version = $Node.Version
+                            Ensure = "Present"
+                            Component = 'Server'
+                            ServerRole = "RealityServer"
+                            Force = $ForceLicenseUpdate
+                        }
                     }
                 }
                 'Pro' 
@@ -88,6 +89,7 @@
                     ArcGIS_License "ProLicense$($Node.NodeName)"
                     {
                         LicenseFilePath =  $Node.ProLicenseFilePath
+                        Version = $Node.ProVersion
                         LicensePassword = $null
                         IsSingleUse = $True
                         Ensure = "Present"

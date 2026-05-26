@@ -27,7 +27,7 @@ function Get-TargetResource {
         $ForceUpdate
     )
     
-    $null
+    @{}
 }
 
 function Set-TargetResource {
@@ -68,7 +68,7 @@ function Set-TargetResource {
         Write-Verbose "Docker Service is already running."
         if($ForceUpdate){
             Write-Verbose "Force Update is set to true. Stopping Docker Service"
-            Stop-Service docker
+            Wait-ForServiceToReachDesiredState -ServiceName "docker" -DesiredState 'Stopped' -Verbose
             Write-Verbose "Docker Service Stopped"
 
             # Unregister docker service
@@ -93,15 +93,14 @@ function Set-TargetResource {
     if($InstallDocker){
         $DockerEnginerZipFileName = Get-FileNameFromUrl $DockerEngineBinariesArchiveUrl
         $DockerEnginerZipFilePath =  (Join-Path $env:TEMP $DockerEnginerZipFileName)
-        Invoke-WebRequest -Verbose:$False -OutFile $DockerEnginerZipFilePath -Uri $DockerEngineBinariesArchiveUrl -UseBasicParsing -ErrorAction Ignore
-
+        Get-RemoteFile -RemoteFileUrl $DockerEngineBinariesArchiveUrl -DestinationFilePath $DockerEnginerZipFilePath -Verbose
         Write-Verbose "Installing Docker Engine"
         Expand-Archive $DockerEnginerZipFilePath -DestinationPath $Env:ProgramFiles
 
         # Register docker service
         &$($DockerDaemonExePath) --register-service 
         # Start docker service
-        Start-Service docker
+        Wait-ForServiceToReachDesiredState -ServiceName "docker" -DesiredState 'Running' -Verbose
         #Test docker engine
         &$($DockerExePath) info
         Write-Verbose "Docker Engine Installed"
@@ -169,6 +168,8 @@ function Set-TargetResource {
     }else{
         Write-Verbose "[WARNING] Docker API is not accessible. Please check the Docker Engine installation."
     }
+
+    $global:DSCMachineStatus = 1
 }
 
 function Test-DockerAPIAccess {

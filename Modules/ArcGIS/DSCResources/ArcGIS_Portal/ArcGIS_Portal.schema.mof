@@ -18,14 +18,11 @@ class ArcGIS_Portal : OMI_BaseResource
 	[Write, Description("LogLevel")] String LogLevel;
 	[Write] String PeerMachineHostName;
 	[Write] String ContentDirectoryLocation;
-
 	[Write, ValueMap{"None","Azure","AWS"}, Values{"None","Azure","AWS"}, Description("Cloud Storage Type")] String CloudProvider;
-	
 	[Write, ValueMap{"AccessKey","IAMRole","None"}, Values{"AccessKey","IAMRole","None"}] String AWSAuthenticationType;
 	[Write] String AWSRegion;
 	[Write] String AWSS3ContentBucketName;
 	[Write, EmbeddedInstance("MSFT_Credential")] String AWSAccessKeyCredential;
-
 	[Write, ValueMap{"AccessKey","ServicePrincipal","UserAssignedIdentity","SASToken","None"}, Values{"AccessKey","ServicePrincipal","UserAssignedIdentity","SASToken","None"}] String AzureAuthenticationType;
 	[Write] String AzureContentBlobContainerName;
 	[Write, EmbeddedInstance("MSFT_Credential")] String AzureStorageAccountCredential;
@@ -33,7 +30,5 @@ class ArcGIS_Portal : OMI_BaseResource
 	[Write] String AzureServicePrincipalTenantId;
 	[Write] String AzureServicePrincipalAuthorityHost;
 	[Write] String AzureUserAssignedIdentityClientId;
-	
 	[Write] Boolean EnableCreateSiteDebug;
 };
-

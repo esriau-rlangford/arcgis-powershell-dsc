@@ -37,7 +37,7 @@
     )
     
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_DataStoreItemServer
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_DataStoreItemServer
 
     Node $AllNodes.NodeName
     {

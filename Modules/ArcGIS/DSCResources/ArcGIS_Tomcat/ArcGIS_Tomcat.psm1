@@ -40,7 +40,7 @@ function Get-TargetResource
         $SSLProtocols = "TLSv1.3,TLSv1.2"
     )
 
-    $null
+    @{}
 }
 
 function Set-TargetResource
@@ -93,9 +93,8 @@ function Set-TargetResource
             Write-Verbose "Installing Apache Tomcat $($TomcatVersion) - '$ServiceName' service. Removing existing installation if present."
             if(Test-Path $InstallDirectory){
                 if(Get-Service $ServiceName -ErrorAction Ignore) {
-                    Stop-Service -Name $ServiceName -Force 
                     Write-Verbose 'Stopping the service' 
-                    Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped'
+                    Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped' -Verbose
                     Write-Verbose 'Stopped the service'
                     
                     $service = Get-WmiObject -Class Win32_Service -Filter "Name='$ServiceName'"
@@ -122,7 +121,7 @@ function Set-TargetResource
                 }
             }
     
-            Invoke-StartProcess -ExecPath "$InstallDirectory\\bin\\service.bat" -Arguments "install $ServiceName" -CatalinaHome $InstallDirectory -AddJavaEnvironmentVariables $True -Verbose
+            Invoke-CliTool -ExecPath "$InstallDirectory\\bin\\service.bat" -Arguments "install $ServiceName" -CatalinaHome $InstallDirectory -AddJavaEnvironmentVariables $True -Verbose
 
             Write-Verbose "Configuring service '$ServiceName' to run under Local System account."
             $scResult = sc.exe config "$ServiceName" obj=LocalSystem
@@ -138,8 +137,7 @@ function Set-TargetResource
         $KeyStoreName = "arcgis.keystore"
         $TomcatConf = (Join-Path $InstallDirectory "conf")
         # Determine the correct server XML file based on Tomcat version
-        $TomcatVersionArray = $Version.Split(".")
-        $TomcatMajor = [int]$TomcatVersionArray[0]
+        $TomcatMajor = ([version]$Version).Major
         $TomcatServerXML = Join-Path $TomcatConf "server.xml"
 
         $KeyStorePath = Join-Path $TomcatConf $KeyStoreName
@@ -211,7 +209,7 @@ function Set-TargetResource
         if(-not($CreateKeyStore)){
             Write-Verbose "Key Store Exists. Testing if the key store accessible and certificate is already in the key store"
             try{
-                $CertificateInKeyStore = Invoke-StartProcess -ExecPath "keytool.exe" -Arguments " -list -keystore $KeyStoreName -storepass $Base64KeyStorePass -alias $CertAliasInKeyStore" `
+                $CertificateInKeyStore = Invoke-CliTool -ExecPath "keytool.exe" -Arguments " -list -keystore $KeyStoreName -storepass $Base64KeyStorePass -alias $CertAliasInKeyStore" `
                  -AddJavaEnvironmentVariables $true -WorkingDirectory $TomcatConf -Verbose
                 if($CertificateInKeyStore -match "^$CertAliasInKeyStore"){
                     Write-Verbose "Certificate with thumbprint $CertAliasInKeyStore found in the key store."
@@ -253,8 +251,8 @@ function Set-TargetResource
 
                     # Use -RedirectStandardOutput to capture keytool's output
                     Start-Process -FilePath "keytool.exe" `
-                    -ArgumentList " -v -list -keystore `"$CertificateFileLocation`" -storepass $srcStorePass" `
-                    -NoNewWindow -Wait -RedirectStandardOutput $tempOutput -PassThru
+                                    -ArgumentList " -v -list -keystore `"$CertificateFileLocation`" -storepass $srcStorePass" `
+                                    -NoNewWindow -Wait -RedirectStandardOutput $tempOutput -PassThru
 
                     # Read the output from the temporary file
 
@@ -271,7 +269,7 @@ function Set-TargetResource
                                 " -storetype PKCS12 -storepass `"$Base64KeyStorePass`" -alias `"$CertAliasInKeyStore`"",
                                 " -dname `"CN=$ExternalDNSName`""))
                 }
-                $CertificateInKeyStore = Invoke-StartProcess -ExecPath "keytool.exe" -Arguments $Arguments -WorkingDirectory $TomcatConf -AddJavaEnvironmentVariables $true -Verbose
+                $CertificateInKeyStore = Invoke-CliTool -ExecPath "keytool.exe" -Arguments $Arguments -WorkingDirectory $TomcatConf -AddJavaEnvironmentVariables $true -Verbose
                 $RestartTomcat = $True
             }
             catch {
@@ -297,14 +295,7 @@ function Set-TargetResource
         }
     
         if($RestartTomcat){
-            Write-Verbose "Stop Service '$ServiceName'"
-            Stop-Service -Name $ServiceName -Force 
-            Write-Verbose 'Stopping the service' 
-            Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped'
-            Write-Verbose 'Stopped the service'
-            Write-Verbose "Restarting Service '$ServiceName' to pick up property change"
-            Start-Service $ServiceName 
-            Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Running'
+            Restart-ArcGISService -ServiceName $ServiceName -Verbose
             Write-Verbose "Restarted Service '$ServiceName'"
         }
     } elseif ($Ensure -eq "Absent") {
@@ -315,9 +306,7 @@ function Set-TargetResource
         $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($existingService) {
             Write-Verbose "Stopping Tomcat service '$ServiceName'..."
-            Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-            Write-Verbose "Waiting for service '$ServiceName' to stop..."
-            Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped'
+            Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped' -Verbose
             Write-Verbose "Service '$ServiceName' has been stopped."
 
             # Remove the service using WMI
@@ -404,8 +393,7 @@ function Test-TargetResource
             $KeyStoreName = "arcgis.keystore"
             $KeyStorePath = Join-Path $TomcatConf $KeyStoreName
             # Determine the correct server XML file based on Tomcat version
-            $TomcatVersionArray = $Version.Split(".")
-            $TomcatMajor = [int]$TomcatVersionArray[0]
+            $TomcatMajor = ([version]$Version).Major
             $TomcatServerXML = Join-Path $TomcatConf "server.xml"
             $Base64KeyStorePass = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ExternalDNSName))
             $result = Test-ApacheTomcatServerXML -TomcatServerXML $TomcatServerXML -Base64KeyStorePass $Base64KeyStorePass `
@@ -424,7 +412,7 @@ function Test-TargetResource
                     }
             
                     try{
-                        $CertificateInKeyStore = Invoke-StartProcess -ExecPath "keytool.exe" -Arguments " -list -keystore `"$KeyStoreName`" -storepass `"$Base64KeyStorePass`" -alias `"$CertAliasInKeyStore`"" -AddJavaEnvironmentVariables $true -WorkingDirectory $TomcatConf
+                        $CertificateInKeyStore = Invoke-CliTool -ExecPath "keytool.exe" -Arguments " -list -keystore `"$KeyStoreName`" -storepass `"$Base64KeyStorePass`" -alias `"$CertAliasInKeyStore`"" -AddJavaEnvironmentVariables $true -WorkingDirectory $TomcatConf
                         if($CertificateInKeyStore -imatch "^$CertAliasInKeyStore"){
                             Write-Verbose "Certificate with alias $CertAliasInKeyStore found in the key store."
                         }else{
@@ -488,7 +476,7 @@ function Test-ApacheTomcatInstall
 			Write-Verbose "Apache Tomcat with Service Name $($TomcatServiceName) found. Installed Apache Tomcat Exe Path - $($TomcatExePath). Expected Install Dir - $($InstallDirectory)"
             if((Test-FileInSubPath -Dir $InstallDirectory -File "$TomcatExePath")){
 				Write-Verbose "Apache Tomcat with Service Name $($TomcatServiceName) found and installed in $($InstallDirectory)"
-				$VersionOutput = Invoke-StartProcess -ExecPath "$InstallDirectory\\bin\\version.bat" -AddJavaEnvironmentVariables $true -CatalinaHome $InstallDirectory -Verbose
+				$VersionOutput = Invoke-CliTool -ExecPath "$InstallDirectory\\bin\\version.bat" -AddJavaEnvironmentVariables $true -CatalinaHome $InstallDirectory -Verbose
 				if($VersionOutput -imatch "Server version: Apache Tomcat/$($TomcatVersion)"){
 					$result = $True
 					Write-Verbose "Apache Tomcat $($TomcatVersion) found and installed in $($InstallDirectory)"
@@ -631,7 +619,7 @@ function Test-FileInSubPath
     $File.FullName.StartsWith($Dir.FullName)
 }
 
-function Invoke-StartProcess {
+function Invoke-CliTool {
     [CmdletBinding()]
     param(
         [System.String]
@@ -652,41 +640,28 @@ function Invoke-StartProcess {
         $CatalinaHome = $null
     )
 	
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-	$psi.EnvironmentVariables["PATH"] = [environment]::GetEnvironmentVariable("PATH","Machine")
+    $EnvVariables = @{
+        "PATH" = [environment]::GetEnvironmentVariable("PATH","Machine")
+    }
+
     if($AddJavaEnvironmentVariables){
 		$JAVA_HOME = [environment]::GetEnvironmentVariable("JAVA_HOME","Machine")
 		if($JAVA_HOME){
-			$psi.EnvironmentVariables["JAVA_HOME"] = $JAVA_HOME
+            $EnvVariables["JAVA_HOME"] = $JAVA_HOME
 		}
 		$JRE_HOME = [environment]::GetEnvironmentVariable("JRE_HOME","Machine")
 		if($JRE_HOME){
-			$psi.EnvironmentVariables["JRE_HOME"] = $JRE_HOME
+            $EnvVariables["JRE_HOME"] = $JRE_HOME
 		}
         if($null -ne $CatalinaHome){
-			$psi.EnvironmentVariables["CATALINA_HOME"] = $CatalinaHome
+            $EnvVariables["CATALINA_HOME"] = $CatalinaHome
         }
     }
-    $psi.FileName = $ExecPath
-    if($null -ne $WorkingDirectory){
-		$psi.WorkingDirectory = $WorkingDirectory
-    }
-    $psi.Arguments = $Arguments
-    $psi.UseShellExecute = $false #start the process from it's own executable file    
-    $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-    $psi.RedirectStandardError = $true #enable the process to read from standard error
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $p.WaitForExit()
-    $op = $p.StandardOutput.ReadToEnd()
-    Write-Verbose "Exit Code - $($p.ExitCode), Standard Output - $op"
-    if($p.ExitCode -eq 0) {                    
-        $op
-    }else {
-        $err = $p.StandardError.ReadToEnd()
-        if($err -and $err.Length -gt 0) {
-            Write-Verbose $err
-        }
-        throw "$($ExecPath) failed. Process exit code:- $($p.ExitCode). Error - $($err)"
+
+    try{
+        Invoke-StartProcess -ExecPath $ExecPath -Arguments $Arguments -WorkingDirectory $WorkingDirectory -EnvVariables $EnvVariables -Verbose
+    }catch{
+        throw "$($ExecPath) failed. Error - $($_)"
     }
 }
 

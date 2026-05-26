@@ -20,10 +20,14 @@ function Get-TargetResource {
 
         [parameter(Mandatory = $False)]    
         [System.Boolean]
-        $ExtractSamples = $False
+        $ExtractSamples = $False,
+
+        [parameter(Mandatory = $False)]    
+        [System.Boolean]
+        $ForceRestart
     )
     
-    $null
+    return @{}
 }
 
 function Set-TargetResource {
@@ -40,8 +44,16 @@ function Set-TargetResource {
 
         [parameter(Mandatory = $False)]    
         [System.Boolean]
-        $ExtractSamples = $False
+        $ExtractSamples = $False,
+
+        [parameter(Mandatory = $False)]    
+        [System.Boolean]
+        $ForceRestart
     )
+
+    if($ForceRestart){
+        Restart-ArcGISService -ComponentName "NotebookServer" -RestartDelay 60
+    }
     
     if($ContainerImagePaths.Length -gt 0){
         foreach ($ImagePath in $ContainerImagePaths) {
@@ -85,7 +97,11 @@ function Test-TargetResource
 
         [parameter(Mandatory = $False)]    
         [System.Boolean]
-        $ExtractSamples = $False
+        $ExtractSamples = $False,
+
+        [parameter(Mandatory = $False)]    
+        [System.Boolean]
+        $ForceRestart
     )
 
     $Result = $True
@@ -103,6 +119,9 @@ function Test-TargetResource
             $Result = $False
             Write-Verbose "Trying to extract Notebook Server Samples Data if not already extracted."
         }
+        if($Result -and $ForceRestart){
+            $Result = $False
+        }
     }catch{
         throw $_
     }
@@ -119,35 +138,17 @@ function Invoke-PostInstallUtility
         $Arguments
     )
 
-    $ServiceName = Get-ArcGISServiceName -ComponentName 'NotebookServer'
-    $RegKey = Get-EsriRegistryKeyForService -ServiceName $ServiceName
-    $InstallDir = (Get-ItemProperty -Path $RegKey -ErrorAction Ignore).InstallDir
+    $InstallDir = (Get-ArcGISComponentVersionAndInstallDirectory -ComponentName 'NotebookServer').InstallDir
     $PostInstallUtilityToolPath = (Join-Path $InstallDir ( Join-Path 'tools' ( Join-Path 'postInstallUtility' 'PostInstallUtility.bat')))
-    if(Test-Path $PostInstallUtilityToolPath){
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $PostInstallUtilityToolPath
-        $psi.Arguments = $Arguments
-        $psi.UseShellExecute = $false #start the process from it's own executable file    
-        $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-        $psi.RedirectStandardError = $true #enable the process to read from standard error
-        $psi.EnvironmentVariables["AGSNOTEBOOK"] = [environment]::GetEnvironmentVariable("AGSNOTEBOOK","Machine")
-
-        $p = [System.Diagnostics.Process]::Start($psi)
-        $p.WaitForExit()
-        $op = $p.StandardOutput.ReadToEnd()
-        Write-Verbose $op
-        if($p.ExitCode -eq 0) {
-            if($op -icontains 'error' -or $op -icontains 'failed') { throw "$op"}
-        }else{
-            $err = $p.StandardError.ReadToEnd()
-            Write-Verbose "Exit Code: $($p.ExitCode). Error - $err"
-            throw "Output - $op. Error - $err"
-        }
-    }else{
+    if(-not(Test-Path $PostInstallUtilityToolPath)){
         throw "Post Install Utility Tool not found."
+    }    
+    try{
+        $op = Invoke-StartProcess -ExecPath $PostInstallUtilityToolPath -Arguments $Arguments -EnvVariables @{ "AGSNOTEBOOK" = $null } -Verbose
+        if($op -icontains 'error' -or $op -icontains 'failed') { throw "$op"}
+    }catch{
+        throw "Post install utility run failed. Error - $_"
     }
 }
-
-
 
 Export-ModuleMember -Function *-TargetResource

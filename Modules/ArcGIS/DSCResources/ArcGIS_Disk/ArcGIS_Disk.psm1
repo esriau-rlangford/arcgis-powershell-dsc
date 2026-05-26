@@ -12,7 +12,7 @@ function Get-TargetResource
         $HostName
     )
 
-    $null
+    @{}
 }
 
 function Set-TargetResource
@@ -81,7 +81,7 @@ function Set-DiskMaxSizeAllocated
     }else{
         Write-Verbose "Drive Letter:- '$DriveLetter' is not allocated. Allocating disk '$DriveLetter'."
         
-        $Disk = Get-Disk -Number $DiskNumber
+        $Disk = Get-Disk -Number $DriveNumber -ErrorAction Stop
         if ($disk.IsOffline -eq $true)
         {
             Write-Verbose 'Setting disk Online'
@@ -96,15 +96,16 @@ function Set-DiskMaxSizeAllocated
 
         if ($disk.PartitionStyle -eq "RAW")
         {
-            Write-Verbose -Message "Initializing disk number '$($DiskNumber)'..."
-            $disk | Initialize-Disk -PartitionStyle GPT -PassThru
-            $partition = $disk | New-Partition -DriveLetter $DriveLetter -UseMaximumSize
+            Write-Verbose -Message "Initializing disk number '$($DriveNumber)'..."
+            $Disk = $Disk | Initialize-Disk -PartitionStyle GPT -PassThru
+            $Partition = $Disk | New-Partition -DriveLetter $DriveLetter -UseMaximumSize
             Start-Sleep -Seconds 5
             $Partition | Format-Volume -FileSystem NTFS -Confirm:$false 
-            Write-Verbose -Message "Successfully initialized disk number '$($DiskNumber)'."
+            Write-Verbose -Message "Successfully initialized disk number '$($DriveNumber)'."
         }
     }
-    return $result
+
+    return (Test-DiskMaxSizeAllocated -DriveLetter $DriveLetter)
 }
 
 

@@ -49,7 +49,8 @@ function Get-TargetResource
 		[System.String]
 		$LogFormat = "csv"
     )
-    $null
+    
+    @{}
 }
 
 function Set-TargetResource
@@ -84,37 +85,30 @@ function Set-TargetResource
 		$LogFormat = "csv"
     )
     
-    $ServiceName = $null
     if($ComponentType -eq "Server"){
+       
         Write-Verbose "Configuring Server Log Harvester Plugin"
-        $ServiceName = Get-ArcGISServiceName -ComponentName 'Server'
-        $RegKey = Get-EsriRegistryKeyForService -ServiceName $ServiceName
-        $InstallDir =(Get-ItemProperty -Path $RegKey -ErrorAction Ignore).InstallDir 
+        $InstallDir = (Get-ArcGISComponentVersionAndInstallDirectory -ComponentName 'Server').InstallDir
         $NodeAgentFilePath = Join-Path $InstallDir 'framework\etc\NodeAgentExt.xml'
-        $MajorVersion = $Version.Split(".")[0]
-        $UsesLog4j = ($Version -ine "10.9.1" -and $MajorVersion -le 10)
         if($EnableLogHarvesterPlugin){
             $ServerObserverFolderPath = Join-Path $InstallDir 'framework\lib\server\observers'
-            $SampleXMLFile = if($UsesLog4j){'LogHarvesterSample.xml'}else{'LogHarvesterSample2.xml'}
+            $SampleXMLFile = 'LogHarvesterSample2.xml'
             $LogXMLFilePath = Join-Path $PSScriptRoot $SampleXMLFile
             [xml]$xml = Get-Content $LogXMLFilePath
-            $DestXMLFileName = if($UsesLog4j){'log4j.xml'}else{ 'log4j2.xml'}
+            $DestXMLFileName = 'log4j2.xml'
             $Log4jxmlFilePath = Join-Path $ServerObserverFolderPath $DestXMLFileName
-            if($UsesLog4j){
-                (($xml.configuration.appender | Where-Object { $_.name -eq "file-services-logs" }).param | Where-Object { $_.name -eq "file" }).value = ( $LogOutputFolder.trimend('\') + "\\services.log" )
-                (($xml.configuration.appender | Where-Object { $_.name -eq "file-server-logs" }).param | Where-Object { $_.name -eq "file" }).value = ( $LogOutputFolder.trimend('\') + "\\server.log" )
-            }else{
-                ($xml.Configuration.Properties.Property | Where-Object { $_.name -eq "log.dir" })."#text" = $LogOutputFolder.trimend('\')
-                ($xml.Configuration.Properties.Property | Where-Object { $_.name -eq "log.format" })."#text" =  $LogFormat 
-            }
+        
+            ($xml.Configuration.Properties.Property | Where-Object { $_.name -eq "log.dir" })."#text" = $LogOutputFolder.trimend('\')
+            ($xml.Configuration.Properties.Property | Where-Object { $_.name -eq "log.format" })."#text" =  $LogFormat 
+        
             $xml.Save($Log4jxmlFilePath)
             $Log4jXMLZipPath = (Join-Path $ServerObserverFolderPath 'log4j-xml.zip')
             Compress-Archive -LiteralPath $Log4jxmlFilePath -CompressionLevel Optimal -DestinationPath $Log4jXMLZipPath -Force
             $Log4jXMLJarPath = (Join-Path $ServerObserverFolderPath 'log4j-xml.jar')
             if(Test-Path $Log4jXMLJarPath){
+                $ServiceName = Get-ArcGISServiceName -ComponentName "Server"
                 Write-Verbose 'Stopping the service' 
-                Stop-Service -Name $ServiceName -Force -ErrorAction Ignore
-                Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped'
+                Wait-ForServiceToReachDesiredState -ServiceName $ServiceName -DesiredState 'Stopped' -Verbose
                 Write-Verbose 'Stopped the service'
                 Start-Sleep -Seconds 5
             }
@@ -168,17 +162,16 @@ function Set-TargetResource
         }
     }
     
-    if(-not($UsesLog4j)){
-        [Environment]::SetEnvironmentVariable("ARCGIS_LOG_APPENDER", "agol", 'Machine')
-    }
+    [Environment]::SetEnvironmentVariable("ARCGIS_LOG_APPENDER", "agol", 'Machine')
 
     #Restart Component
-    Restart-ArcGISService -ServiceName $ServiceName -Verbose
+    Restart-ArcGISService -ComponentName ComponentType -Verbose
 
     if($ComponentType -eq "Server"){
         $FQDN = if($HostName){ Get-FQDN $HostName }else{ Get-FQDN $env:COMPUTERNAME }
-        Write-Verbose "Waiting for Server 'https://$($FQDN):6443/arcgis/admin' to initialize"
-        Wait-ForUrl "https://$($FQDN):6443/arcgis/admin" -HttpMethod 'GET'
+        $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+        Write-Verbose "Waiting for Server '$($ServerBaseUrl)' to initialize"
+        Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName "Server"
     }
 }
 
@@ -217,9 +210,7 @@ function Test-TargetResource
 
     $result = $true
     if($ComponentType -eq "Server"){
-        $ServiceName = Get-ArcGISServiceName -ComponentName 'Server'
-        $RegKey = Get-EsriRegistryKeyForService -ServiceName $ServiceName
-        $InstallDir =(Get-ItemProperty -Path $RegKey -ErrorAction Ignore).InstallDir 
+        $InstallDir = (Get-ArcGISComponentVersionAndInstallDirectory -ComponentName 'Server').InstallDir
         if($EnableLogHarvesterPlugin){
             if(-not (Get-NodeAgentServerLogHarvestorPresent -InstallDir $InstallDir)){
                 Write-Verbose "Log Harvestor Plugin is not Enabled. Needs to be Enabled"

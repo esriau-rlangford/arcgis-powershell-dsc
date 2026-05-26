@@ -58,7 +58,7 @@ function Get-TargetResource
         $IsMSAAccount = $false
 	)
 
-	$null
+	@{}
 }
 
 

@@ -1,5 +1,9 @@
 ﻿Configuration ArcGISPortalSettings{
     param(
+        [Parameter(Mandatory=$True)]
+        [System.String]
+        $Version,
+
         [Parameter(Mandatory=$true)]
         [ValidateNotNullorEmpty()]
         [System.Management.Automation.PSCredential]
@@ -106,7 +110,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.0.1 -Name ArcGIS_PortalSettings
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_PortalSettings
     
     Node $AllNodes.NodeName
     {
@@ -117,50 +121,49 @@
             }
         }
         
-        if($Node.NodeName -ieq $PrimaryPortalMachine){
-            $PortalEndpointPort = 443
-            if($InternalLoadBalancer -or !$ExternalDNSHostName){
-                $PortalEndpointPort = 7443
-                if($InternalLoadBalancer){
-                    if($InternalLoadBalancerPort){
-                        $PortalEndpointPort = $InternalLoadBalancerPort
-                    }
+        $PortalEndpointPort = 443
+        if($InternalLoadBalancer -or !$ExternalDNSHostName){
+            $PortalEndpointPort = 7443
+            if($InternalLoadBalancer){
+                if($InternalLoadBalancerPort){
+                    $PortalEndpointPort = $InternalLoadBalancerPort
                 }
             }
+        }
 
-            ArcGIS_PortalSettings PortalSettings
-            {
-                PortalHostName          = $PrimaryPortalMachine
-                ExternalDNSName         = $ExternalDNSHostName
-                PortalContext           = $PortalContext
-                PortalEndPoint          = if($InternalLoadBalancer){ $InternalLoadBalancer }else{ if($ExternalDNSHostName){ $ExternalDNSHostName }else{ Get-FQDN $PrimaryPortalMachine }}
-                PortalEndPointContext   = if($InternalLoadBalancer -or !$ExternalDNSHostName){ 'arcgis' }else{ $PortalContext }
-                PortalEndPointPort      = $PortalEndpointPort
-                PortalAdministrator     = $PortalAdministratorCredential
-                HttpProxyHost     = $HttpProxyHost
-                HttpProxyPort     = $HttpProxyPort
-                HttpProxyCredential  = $HttpProxyCredential
+        ArcGIS_PortalSettings PortalSettings
+        {
+            Version                 = $Version
+            PortalHostName          = $PrimaryPortalMachine
+            ExternalDNSName         = $ExternalDNSHostName
+            PortalContext           = $PortalContext
+            PortalEndPoint          = if($InternalLoadBalancer){ $InternalLoadBalancer }else{ if($ExternalDNSHostName){ $ExternalDNSHostName }else{ Get-FQDN $PrimaryPortalMachine }}
+            PortalEndPointContext   = if($InternalLoadBalancer -or !$ExternalDNSHostName){ 'arcgis' }else{ $PortalContext }
+            PortalEndPointPort      = $PortalEndpointPort
+            PortalAdministrator     = $PortalAdministratorCredential
+            HttpProxyHost           = $HttpProxyHost
+            HttpProxyPort           = $HttpProxyPort
+            HttpProxyCredential     = $HttpProxyCredential
 
-                HttpsProxyPort    = $HttpsProxyPort
-                HttpsProxyHost    = $HttpsProxyHost
-                HttpsProxyCredential = $HttpsProxyCredential
-                
-                NonProxyHosts     = $NonProxyHosts
-                ADServiceUser           = $ADServiceCredential
-                EnableAutomaticAccountCreation = if($EnableAutomaticAccountCreation) { $true } else { $false }
-                DefaultRoleForUser      = $DefaultRoleForUser
-                DefaultUserLicenseTypeIdForUser = $DefaultUserLicenseTypeIdForUser
-                DisableServiceDirectory = if($DisableServiceDirectory) { $true } else { $false }
-                DisableAnonymousAccess  = if($DisableAnonymousAccess) { $true } else { $false }
-                EnableEmailSettings     = if($EnableEmailSettings){ $True }else{ $False }
-                EmailSettingsSMTPServerAddress = if($EnableEmailSettings){ $EmailSettingsSMTPServerAddress }else{ $null }
-                EmailSettingsFrom = if($EnableEmailSettings){ $EmailSettingsFrom }else{ $null }
-                EmailSettingsLabel = if($EnableEmailSettings){ $EmailSettingsLabel }else{ $null }
-                EmailSettingsAuthenticationRequired = if($EnableEmailSettings){ $EmailSettingsAuthenticationRequired }else{ $false }
-                EmailSettingsCredential =if($EnableEmailSettings){ $EmailSettingsCredential }else{ $null }
-                EmailSettingsSMTPPort = if($EnableEmailSettings){ $EmailSettingsSMTPPort }else{ $null }
-                EmailSettingsEncryptionMethod = if($EnableEmailSettings){ $EmailSettingsEncryptionMethod }else{ "NONE" }
-            }
+            HttpsProxyPort          = $HttpsProxyPort
+            HttpsProxyHost          = $HttpsProxyHost
+            HttpsProxyCredential    = $HttpsProxyCredential
+            
+            NonProxyHosts           = $NonProxyHosts
+            ADServiceUser           = $ADServiceCredential
+            EnableAutomaticAccountCreation = if($EnableAutomaticAccountCreation) { $true } else { $false }
+            DefaultRoleForUser      = $DefaultRoleForUser
+            DefaultUserLicenseTypeIdForUser = $DefaultUserLicenseTypeIdForUser
+            DisableServiceDirectory = if($DisableServiceDirectory) { $true } else { $false }
+            DisableAnonymousAccess  = if($DisableAnonymousAccess) { $true } else { $false }
+            EnableEmailSettings     = if($EnableEmailSettings){ $True }else{ $False }
+            EmailSettingsSMTPServerAddress = if($EnableEmailSettings){ $EmailSettingsSMTPServerAddress }else{ $null }
+            EmailSettingsFrom       = if($EnableEmailSettings){ $EmailSettingsFrom }else{ $null }
+            EmailSettingsLabel      = if($EnableEmailSettings){ $EmailSettingsLabel }else{ $null }
+            EmailSettingsAuthenticationRequired = if($EnableEmailSettings){ $EmailSettingsAuthenticationRequired }else{ $false }
+            EmailSettingsCredential = if($EnableEmailSettings){ $EmailSettingsCredential }else{ $null }
+            EmailSettingsSMTPPort   = if($EnableEmailSettings){ $EmailSettingsSMTPPort }else{ $null }
+            EmailSettingsEncryptionMethod = if($EnableEmailSettings){ $EmailSettingsEncryptionMethod }else{ "NONE" }
         }
     }
 }

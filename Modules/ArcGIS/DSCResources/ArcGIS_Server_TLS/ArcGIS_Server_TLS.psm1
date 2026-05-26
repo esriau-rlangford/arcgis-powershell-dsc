@@ -5,12 +5,15 @@ Import-Module -Name (Join-Path -Path $modulePath `
         -ChildPath (Join-Path -Path 'ArcGIS.Common' `
             -ChildPath 'ArcGIS.Common.psm1'))
 
+Import-Module -Name (Join-Path -Path $modulePath `
+        -ChildPath (Join-Path -Path 'ArcGIS.Client' `
+            -ChildPath 'ArcGIS.Client.Server.psm1'))
 <#
     .SYNOPSIS
         Creates a SelfSigned Certificate or Installs a SSL Certificated Provided and Configures it with Server
     .PARAMETER ServerHostName
         Optional Host Name or IP of the Machine on which the Server has been installed and is to be configured.
-    .PARAMETER ServerRole
+    .PARAMETER ServerType
         Site Name or Default Context of Server
     .PARAMETER SiteAdministrator
         A MSFT_Credential Object - Primary Site Administrator.
@@ -39,7 +42,7 @@ function Get-TargetResource
         $ServerHostName
 	)
 
-	$null # TODO
+	@{}
 }
 
 function Set-TargetResource
@@ -89,33 +92,31 @@ function Set-TargetResource
         throw "Certificate File '$CertificateFileLocation' is not found or inaccessible"
     }
     
-    $ServiceName = Get-ArcGISServiceName -ComponentName $ServerType
-    $SitePort = 6443
-    if($ServerType -ieq "NotebookServer"){
-        $SitePort = 11443
-    }elseif($ServerType -ieq "MissionServer"){
-        $SitePort = 20443
-    }elseif($ServerType -ieq "VideoServer"){
-        $SitePort = 21443
-    }
-    
     $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
-	$ServerUrl = "https://$($FQDN):$($SitePort)"
     
-    Wait-ForUrl -Url "$($ServerUrl)/arcgis/admin/"
-    Wait-ForUrl -Url "$($ServerUrl)/arcgis/rest/info/healthcheck?f=json" -HttpMethod 'GET'
-    $Referer = $ServerUrl
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName $ServerType -FQDN $FQDN
+    $Referer = $ServerBaseUrl
+	Write-Verbose "Waiting for Server '$($ServerBaseUrl)' to initialize"
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType
                       
-    $token = Get-ServerToken -ServerEndPoint $ServerURL -Credential $SiteAdministrator -Referer $Referer
+    $token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer
     if(-not($token.token)){
         throw "Unable to retrieve token for Site Administrator"
     }
 
-    # Get the current security configuration
-    if($ServerType -ine "NotebookServer" -and $ServerType -ine "MissionServer" -and $ServerType -ine "VideoServer"){
+    $MachineName = $FQDN
+    $RestartRequired = $False
+    if($null -ne $SslRootOrIntermediate){ #RootOrIntermediateCertificate
+        $RestartRequired = Set-ServerRootAndIntermdiateCertificates -URL $ServerBaseUrl -ServerType $ServerType `
+                                                -Token $token.token -Referer $Referer -MachineName $MachineName `
+                                                -SslRootOrIntermediate $SslRootOrIntermediate -Verbose
+    }
+
+    # Get the current security configuration only for GIS Servers
+    if(Test-IfGISServer -ServerType $ServerType){
         $UpdateSecurityConfig = $False
         Write-Verbose 'Getting security config for site'
-        $secConfig = Get-SecurityConfig -ServerURL $ServerURL -Token $token.token -Referer $Referer
+        $secConfig = Get-SecurityConfig -URL $ServerBaseUrl -Token $token.token -Referer $Referer
         
         if($EnableHTTPSOnly){
             if($secConfig.sslEnabled -and -not($secConfig.httpEnabled)){
@@ -147,26 +148,21 @@ function Set-TargetResource
         }
 
         if($UpdateSecurityConfig){
-            Update-SecurityConfig -ServerURL $ServerURL -Token $token.token -SecurityConfig $secConfig `
-                                        -Referer $Referer -EnableHTTPSOnly $EnableHTTPSOnly -EnableHSTS $EnableHSTS -Verbose
+            Update-SecurityConfig -URL $ServerBaseUrl -Token $token.token -Referer $Referer `
+                                    -Properties $secConfig -EnableHTTPSOnly $EnableHTTPSOnly `
+                                    -EnableHSTS $EnableHSTS -MaxAttempts 1 -Verbose
+            
             # Changes will cause the web server to restart.
             Write-Verbose "Waiting 30 seconds before checking"
             Start-Sleep -Seconds 30
 
-            Write-Verbose "Waiting for Url '$($ServerUrl)/arcgis/admin' to respond"
-            Wait-ForUrl -Url "$($ServerUrl)/arcgis/admin/" -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 90 
-            Wait-ForUrl -Url "$($ServerUrl)/arcgis/rest/info/healthcheck?f=json" -HttpMethod 'GET'
+            Write-Verbose "Waiting for Server '$($ServerBaseUrl)'"
+            Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 150
         }
     }
 
-    $MachineName = $FQDN
-    $AllMachines = Get-Machines -ServerURL $ServerURL -Token $token.token -Referer $Referer
-    if(-not($AllMachines.machines | Where-Object { $_.machineName -ieq $MachineName })) {
-        $MachineName = $env:COMPUTERNAME
-        if(-not($AllMachines.machines | Where-Object { $_.machineName -ieq $MachineName })){
-            throw "Not able to find machine in site with either hostname $MachineName or fully qualified domain name $FQDN"
-        }
-    }
+    
+    Test-MachineExists -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName
 
     if($CertificateFileLocation){
         if(-not(Test-Path $CertificateFileLocation)){
@@ -180,7 +176,7 @@ function Set-TargetResource
         $DeleteTempCert = $False
         $ImportCert = $False
         $UpdateWebAlias = $False
-        $CertForMachine = Get-SSLCertificateForMachine -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $WebServerCertificateAlias.ToLower()
+        $CertForMachine = Get-SSLCertificateForMachine -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $WebServerCertificateAlias.ToLower()
         if($null -ne $CertForMachine){ # Certificate with CName Found
             $NewCertIssuer = $null
             $NewCertThumbprint = $null
@@ -196,32 +192,36 @@ function Set-TargetResource
             $ExistingCertIssuer = $CertForMachine.Issuer    
             $ExistingCertThumbprint = $CertForMachine.Thumbprint
             Write-Verbose "Existing Cert Issuer $ExistingCertIssuer with Thumbprint $ExistingCertThumbprint"
-            $machineDetails = Get-MachineDetails -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName
+            $machineDetails = Get-MachineProperties -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName
             if($ExistingCertThumbprint -ine $NewCertThumbprint -or $ForceImportCertificate){ #Certificate Thumbprint doesn't match
                 if($WebServerCertificateAlias -ieq $machineDetails.webServerCertificateAlias -or $ForceImportCertificate){
                     $DeleteTempCert = $True
                     #Upload Temp Cert
                     Write-Verbose "Force import certificate is: $ForceImportCertificate"
                     Write-Verbose "Importing Supplied Certificate with Alias $($WebServerCertificateAlias)-temp"
-                    Import-ExistingCertificate -ServerUrl $ServerUrl -Token $token.token -Referer $Referer `
+                    Import-ExistingCertificate -URL $ServerBaseUrl -Token $token.token -Referer $Referer `
                         -MachineName $MachineName -CertAlias "$($WebServerCertificateAlias)-temp" -CertificatePassword $CertificatePassword `
                         -CertificateFilePath $CertificateFileLocation -ServerType $ServerType -ImportCertificateChain $ImportCertificateChain -Version $Version
 
+                    $RestartRequired = $False
                     #Update Web Alias to Temp Cert
                     Write-Verbose "Updating to temp SSL Certificate for machine [$MachineName]"
-                    $machine = Get-MachineDetails -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName
-                    $machine.webServerCertificateAlias = "$($WebServerCertificateAlias)-temp"
-                    Update-SSLCertificate -ServerURL $ServerURL -Token $token.token -MachineName $MachineName -MachineProperties $machine -Referer $Referer
+                    Update-MachineProperties -URL $ServerBaseUrl `
+                            -Token          $token.token `
+                            -Referer        $Referer `
+                            -MachineName    $MachineName `
+                            -WebServerCertificateAlias "$($WebServerCertificateAlias)-temp" -Verbose
+                    
                     Start-Sleep -Seconds 30
-                    Write-Verbose "Waiting for Url '$ServerUrl/arcgis/admin' to respond"
-                    Wait-ForUrl -Url "$ServerUrl/arcgis/admin" -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 150 -HttpMethod 'GET' -Verbose
-                    Wait-ForUrl -Url "$($ServerUrl)/arcgis/rest/info/healthcheck?f=json" -HttpMethod 'GET'
+
+                    Write-Verbose "Waiting for Server '$ServerBaseUrl'"
+                    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 150
                 }
 
                 #Delete Certificate
                 Write-Verbose "Certificate with alias $WebServerCertificateAlias already exists for machine $MachineName. Deleting it"
                 try {
-                    $res = Invoke-DeleteSSLCertForMachine -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $WebServerCertificateAlias.ToLower()
+                    $res = Invoke-DeleteSSLCertForMachine -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $WebServerCertificateAlias.ToLower()
                     Write-Verbose "Delete Certificate Operation result - $($res | ConvertTo-Json)"
                 }
                 catch {
@@ -243,37 +243,40 @@ function Set-TargetResource
         }
 
         if($ImportCert){
-            Wait-ForUrl -Url "$ServerUrl/arcgis/admin" -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 150 -HttpMethod 'GET' -Verbose
-            Wait-ForUrl -Url "$($ServerUrl)/arcgis/rest/info/healthcheck?f=json" -HttpMethod 'GET'
+            Write-Verbose "Waiting for Server '$ServerBaseUrl'"
+            Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 150
 
             # Import the Supplied Certificate  
             Write-Verbose "Importing Supplied Certificate with Alias $WebServerCertificateAlias"
-            Import-ExistingCertificate -ServerUrl $ServerUrl -Token $token.token -Referer $Referer `
+            Import-ExistingCertificate -URL $ServerBaseUrl -Token $token.token -Referer $Referer `
                     -MachineName $MachineName -CertAlias $WebServerCertificateAlias -CertificatePassword $CertificatePassword `
                     -CertificateFilePath $CertificateFileLocation -ServerType $ServerType -ImportCertificateChain $ImportCertificateChain -Version $Version
         }
 
         if($UpdateWebAlias){
-            $machine = Get-MachineDetails -ServerURL $ServerURL -Token $token.token -MachineName $MachineName -Referer $Referer
-            # Update the SSL Cert for machine
+            $RestartRequired = $False
             Write-Verbose "Updating SSL Certificate for machine [$MachineName]"
-            $machine.webServerCertificateAlias = $WebServerCertificateAlias
-            Update-SSLCertificate -ServerURL $ServerURL -Token $token.token -MachineName $MachineName -MachineProperties $machine -Referer $Referer
+            Update-MachineProperties -URL            $ServerBaseUrl `
+                                    -Token          $token.token `
+                                    -Referer        $Referer `
+                                    -MachineName    $MachineName `
+                                    -WebServerCertificateAlias $WebServerCertificateAlias -Verbose
+
             Start-Sleep -Seconds 30
-            Write-Verbose "Waiting for Url '$ServerUrl/arcgis/admin' to respond"
-            Wait-ForUrl -Url "$ServerUrl/arcgis/admin" -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 150 -HttpMethod 'GET' -Verbose
-            Wait-ForUrl -Url "$($ServerUrl)/arcgis/rest/info/healthcheck?f=json" -HttpMethod 'GET'
+
+            Write-Verbose "Waiting for Server '$ServerBaseUrl'"
+            Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -SleepTimeInSeconds 15 -MaxWaitTimeInSeconds 150
 
             # Restart Geoevent
-            if($ServerType -ine "NotebookServer" -and $ServerType -ine "MissionServer" -and $ServerType -ine "VideoServer"){ #TODO - This will cause issues in Azure, where we have Geoevent and WFM running.
+            if(Test-IfGISServer -ServerType $ServerType){ #TODO - This will cause issues in Azure, where we have Geoevent and WFM running.
                 ### If the SSL Certificate is changed. Restart the GeoEvent Service so that it will pick up the new certificate 
                 $GeoEventServiceName = 'ArcGISGeoEvent' 
                 $GeoEventService = Get-Service -Name $GeoEventServiceName -ErrorAction Ignore
-                if($GeoEventService.Status -ieq 'Running') {
-                    $GeoEventServerHttpsUrl = "https://localhost:6143"
+                if($GeoEventService -and $GeoEventService.Status -ieq 'Running') {
+                    $GeoEventServerHttpsUrl = Get-ArcGISComponentBaseUrl -ComponentName "GeoEventServer" -Context "geoevent"
                     Restart-ArcGISService -ServiceName $GeoEventServiceName -Verbose
-                    Write-Verbose "Waiting for Url '$GeoEventServerHttpsUrl/geoevent/rest' to respond"
-                    Wait-ForUrl -Url "$GeoEventServerHttpsUrl/geoevent/rest" -SleepTimeInSeconds 20 -MaxWaitTimeInSeconds 150 -HttpMethod 'GET' -Verbose
+                    Write-Verbose "Waiting for Url '$($GeoEventServerHttpsUrl)/rest' to respond"
+                    Test-ArcGISComponentHealth -BaseURL $GeoEventServerHttpsUrl -ComponentName "GeoEvent" -SleepTimeInSeconds 20 -MaxWaitTimeInSeconds 150 -Verbose
                     Write-Verbose "Restarted Service $GeoEventServiceName"
                 }
             }
@@ -282,7 +285,7 @@ function Set-TargetResource
         if($DeleteTempCert){ #Delete Temp Cert
             try {
                 Write-Verbose "Deleting Temp Certificate with alias $($WebServerCertificateAlias)-temp"
-                $res = Invoke-DeleteSSLCertForMachine -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName "$($WebServerCertificateAlias)-temp".ToLower()
+                $res = Invoke-DeleteSSLCertForMachine -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName "$($WebServerCertificateAlias)-temp".ToLower()
                 Write-Verbose "Delete Temp Certificate Operation result - $($res | ConvertTo-Json)"
             }
             catch {
@@ -293,53 +296,15 @@ function Set-TargetResource
         Write-Verbose "CertificateFileLocation not specified. Skipping web server certificate configuration"
     }
 
-    if($null -ne $SslRootOrIntermediate){ #RootOrIntermediateCertificate
-        $RestartRequired = $false
-        $Certs = Get-AllSSLCertificateForMachine -ServerUrl $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName 
-        $AllCertificates = if($ServerType -ieq "NotebookServer" -or $ServerType -ieq "MissionServer" -and $ServerType -ieq "VideoServer"){ $Certs.sslCertificates }else{ $Certs.certificates}
-        foreach ($key in ($SslRootOrIntermediate | ConvertFrom-Json)){
-            $UploadRootOrIntermediateCertificate = $False
-            if ($AllCertificates -icontains $key.Alias){
-                Write-Verbose "RootOrIntermediate $($key.Alias) is in List of SSL-Certificates."
-                $RootOrIntermediateCertForMachine = Get-SSLCertificateForMachine -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $key.Alias.ToLower() -Verbose
-                Write-Verbose "Existing Cert Issuer $($RootOrIntermediateCertForMachine.Issuer) and Thumbprint $($RootOrIntermediateCertForMachine.Thumbprint)"
-                $NewCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $key.Path
-                Write-Verbose "Issuer and Thumprint for the supplied certificate is $($NewCert.Issuer) and $($NewCert.Thumbprint) respectively."
-                if($RootOrIntermediateCertForMachine.Thumbprint -ine $NewCert.Thumbprint){
-                    Write-Verbose "Thumbprints for Certificate with Alias $($key.Alias) doesn't match that of existing cetificate. Deleting existing certificate and uploading a new one"
-                    $UploadRootOrIntermediateCertificate = $True
-                    $res = Invoke-DeleteSSLCertForMachine -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $key.Alias.ToLower()
-                    Write-Verbose "Delete existing Certificate Operation result - $($res | ConvertTo-Json)"
-                }else{
-                    Write-Verbose "Thumbprints for Certificate with Alias $($key.Alias) match that of existing cetificate."
-                }
-            }else{
-                Write-Verbose "RootOrIntermediate $($key.Alias) is NOT in List of SSL-Certificates Import-RootOrIntermediate"
-                $UploadRootOrIntermediateCertificate = $True
-            }
+    if($RestartRequired)
+    {
+        Write-Verbose "Restart required."
+        Restart-ArcGISService -ComponentName $ServerType -Verbose
+        Write-Verbose "Waiting 30 seconds before checking for initialization"
+        Start-Sleep -Seconds 30
 
-            if($UploadRootOrIntermediateCertificate){
-                try{
-                    Import-RootOrIntermediateCertificate -ServerUrl $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -CertAlias $key.Alias.ToLower() -CertificateFilePath $key.Path
-                    if(-not($RestartRequired)){
-                        $RestartRequired = $True
-                    }
-                }catch{
-                    Write-Verbose "Error in Import-RootOrIntermediateCertificate :- $_"
-                }
-            }
-        }
-
-        if($RestartRequired)
-        {
-            Write-Verbose "Server Root and intermediate certificates were updated. Restarting Server."
-            Restart-ArcGISService -ServiceName $ServiceName -Verbose
-            Write-Verbose "Waiting 30 seconds before checking for intitialization"
-            Start-Sleep -Seconds 30
-            Write-Verbose "Waiting for Url '$ServerURL/arcgis/admin' to respond"
-            Wait-ForUrl -Url "$ServerURL/arcgis/admin" -SleepTimeInSeconds 10 -MaxWaitTimeInSeconds 60 -HttpMethod 'GET'
-            Wait-ForUrl -Url "$($ServerUrl)/arcgis/rest/info/healtcheck?f=json" -HttpMethod 'GET'
-        }
+        Write-Verbose "Waiting for Server '$ServerBaseUrl'"
+        Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType -SleepTimeInSeconds 10 -MaxWaitTimeInSeconds 60
     }
 }
 
@@ -393,29 +358,23 @@ function Test-TargetResource
 
     [System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
     $result = $True
-       
-    $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
-    $SitePort = 6443
-    if($ServerType -ieq "NotebookServer"){
-        $SitePort = 11443
-    }elseif($ServerType -ieq "MissionServer"){
-        $SitePort = 20443
-    }elseif($ServerType -ieq "VideoServer"){
-        $SitePort = 21443
-    }
-    $ServerUrl = "https://$($FQDN):$($SitePort)"
-        
-    Wait-ForUrl -Url "$($ServerUrl)/arcgis/admin/" -MaxWaitTimeInSeconds 60 -HttpMethod 'GET'
-    Wait-ForUrl -Url "$($ServerUrl)/arcgis/rest/info/healthcheck?f=json" -HttpMethod 'GET'
 
-    $Referer = $ServerUrl
-    $token = Get-ServerToken -ServerEndPoint $ServerUrl -Credential $SiteAdministrator -Referer $Referer 
+    $FQDN = if($ServerHostName){ Get-FQDN $ServerHostName }else{ Get-FQDN $env:COMPUTERNAME }
+
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName $ServerType -FQDN $FQDN
+    $Referer = $ServerBaseUrl
+	Write-Verbose "Waiting for Server '$($ServerBaseUrl)'"
+    Test-ArcGISComponentHealth -BaseURL $ServerBaseUrl -ComponentName $ServerType
+
+    $Referer = $ServerBaseUrl
+    $token = Get-ServerToken -URL $ServerBaseUrl -Credential $SiteAdministrator -Referer $Referer
     if(-not($token.token)){
         throw "Unable to retrieve token for Site Administrator"
     }
 
-    if($ServerType -ine "NotebookServer" -and $ServerType -ine "MissionServer" -and $ServerType -ine "VideoServer"){
-        $secConfig = Get-SecurityConfig -ServerURL $ServerURL -Token $token.token -Referer $Referer
+    # Only for GIS Server
+    if(Test-IfGISServer -ServerType $ServerType){
+        $secConfig = Get-SecurityConfig -URL $ServerBaseUrl -Token $token.token -Referer $Referer
         if($result){
             if($EnableHTTPSOnly){
                 if($secConfig.sslEnabled -and -not($secConfig.httpEnabled)){
@@ -449,13 +408,7 @@ function Test-TargetResource
     }
 
     $MachineName = $FQDN
-    $AllMachines = Get-Machines -ServerURL $ServerURL -Token $token.token -Referer $Referer
-    if(-not($AllMachines.machines | Where-Object { $_.machineName -ieq $MachineName })) {
-        $MachineName = $env:COMPUTERNAME
-        if(-not($AllMachines.machines | Where-Object { $_.machineName -ieq $MachineName })){
-            throw "Not able to find machine in site with either hostname $MachineName or fully qualified domain name $FQDN"
-        }
-    }
+    Test-MachineExists -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName
 
     if($result){
         if($CertificateFileLocation){
@@ -463,7 +416,7 @@ function Test-TargetResource
                 throw "Certificate File '$CertificateFileLocation' is not found"
             }
             
-            $CertForMachine = Get-SSLCertificateForMachine -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $WebServerCertificateAlias.ToLower() -Verbose
+            $CertForMachine = Get-SSLCertificateForMachine -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $WebServerCertificateAlias.ToLower() -Verbose
             if($null -ne $CertForMachine){ # Certificate with Alias Found
                 $NewCertIssuer = $null
                 $NewCertThumbprint = $null
@@ -480,11 +433,11 @@ function Test-TargetResource
                 Write-Verbose "Existing Cert Issuer $ExistingCertIssuer and Thumbprint $ExistingCertThumbprint"
 
                 # Compare thumbprints and alias
-                $machineDetails = Get-MachineDetails -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName
                 if($ExistingCertThumbprint -ine $NewCertThumbprint){ #Certificate Thumbprint doesn't match
                     Write-Verbose "Thumbprints for Certificate with Alias $WebServerCertificateAlias doesn't match that of existing cetificate."
                     $result = $False
                 }else{ # Thumbprint matches
+                    $machineDetails = Get-MachineProperties -URL $ServerBaseUrl -Token $token.token -Referer $Referer -MachineName $MachineName
                     if($WebServerCertificateAlias -ine $machineDetails.webServerCertificateAlias){
                         Write-Verbose "Certificate with alias $WebServerCertificateAlias already exists for machine $MachineName, but web server certificate alias $($machineDetails.webServerCertificateAlias) doesn't match."
                         $result = $False
@@ -498,427 +451,26 @@ function Test-TargetResource
             }
         }
     }
+    
     if($result -and $null -ne $SslRootOrIntermediate){
-        $Certs = Get-AllSSLCertificateForMachine -ServerUrl $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName 
-        $AllCertificates = if($ServerType -ieq "NotebookServer" -or $ServerType -ieq "MissionServer" -or $ServerType -ieq "VideoServer"){ $Certs.sslCertificates }else{ $Certs.certificates}
-        foreach ($key in ($SslRootOrIntermediate | ConvertFrom-Json)){
-            if ($AllCertificates -icontains $key.Alias){
-                Write-Verbose "RootOrIntermediate $($key.Alias) is in List of SSL-Certificates. Validating if thumbprint matches the existing certificate"
-                $RootOrIntermediateCertForMachine = Get-SSLCertificateForMachine -ServerURL $ServerUrl -Token $token.token -Referer $Referer -MachineName $MachineName -SSLCertName $key.Alias.ToLower() -Verbose
-                Write-Verbose "Existing Cert Issuer $($RootOrIntermediateCertForMachine.Issuer) and Thumbprint $($RootOrIntermediateCertForMachine.Thumbprint)"
-                $NewCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $key.Path
-                Write-Verbose "Issuer and Thumprint for the supplied certificate is $($NewCert.Issuer) and $($NewCert.Thumbprint) respectively."
-                if($RootOrIntermediateCertForMachine.Thumbprint -ine $NewCert.Thumbprint){
-                    Write-Verbose "Thumbprints for Certificate with Alias $($key.Alias) doesn't match that of existing cetificate."
-                    $result = $False
-                }else{
-                    Write-Verbose "Thumbprints for Certificate with Alias $($key.Alias) match that of existing cetificate."
-                }
-            }else{
-                Write-Verbose "RootOrIntermediate $($key.Alias) is NOT in List of SSL-Certificates"
-                $result = $False
-            }
+        $MissingCerts = Get-ServerRootAndIntermdiateCertificatesToUpdate -URL $ServerBaseUrl -ServerType $ServerType `
+                                                -Token $token.token -Referer $Referer -MachineName $MachineName `
+                                                -SslRootOrIntermediate $SslRootOrIntermediate -Verbose
+        $result = ($MissingCerts.Length -eq 0)
+        if(-not($result)){
+            Write-Verbose "One or more root and intermediate certificate needs an update."
         }
     }
+
     if ($Version -and ([version]$Version -ge [version]"11.3") `
-    -and (-not($ServerType -ieq "NotebookServer" -or $ServerType -ieq "MissionServer" -or $ServerType -ieq "VideoServer")) `
-    -and ($ForceImportCertificate)) {
+        -and (Test-IfGISServer -ServerType $ServerType) `
+        -and ($ForceImportCertificate)) {
         $result = $false
         Write-Verbose "Force import certificate is True"
     }
+
 	Write-Verbose "Returning $result from Test-TargetResource"
     $result
 }
-
-function Invoke-DeleteSSLCertForMachine
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerURL, 
-
-        [System.String]
-        $Token, 
-
-        [System.String]
-        $Referer, 
-
-        [System.String]
-        $MachineName, 
-
-        [System.String]
-        $SSLCertName
-    )
-     
-    $DeleteSSlCertUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/sslCertificates/$SSLCertName/delete"
-    Invoke-ArcGISWebRequest -Url $DeleteSSlCertUrl -HttpFormParameters @{ f= 'json'; token = $Token; } -Referer $Referer -HttpMethod 'POST' -TimeoutSec 150
-}
-
-function Invoke-GenerateSelfSignedCertificate
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerURL,
-
-        [System.String]
-        $Token, 
-
-        [System.String]
-        $Referer, 
-
-        [System.String]
-        $MachineName,
-
-        [System.String]
-        $CertAlias, 
-
-        [System.String]
-        $CertCommonName, 
-
-        [System.String]
-        $CertOrganization, 
-
-        [System.String]
-        $ValidityInDays = 1825
-
-    )
-
-    $GenerateSelfSignedCertUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/sslCertificates/generate"
-    $props = @{ f= 'json'; token = $Token; alias = $CertAlias; commonName = $CertCommonName; organization = $CertOrganization; validity = $ValidityInDays } 
-    Invoke-ArcGISWebRequest -Url $GenerateSelfSignedCertUrl -HttpFormParameters $props -Referer $Referer -TimeOutSec 150
-}
-
-function Import-ExistingCertificate
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerUrl, 
-        
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $Referer, 
-        
-        [System.String]
-        $MachineName, 
-        
-        [System.String]
-        $CertAlias, 
-        
-        [System.Management.Automation.PSCredential]
-        $CertificatePassword, 
-        
-        [System.String]
-        $CertificateFilePath,
-        
-        [System.String]
-        $ServerType,
-
-        [System.String]
-        $Version,
-
-        [System.Boolean]
-        $ImportCertificateChain = $true
-    )
-
-    $ImportCACertUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/sslCertificates/importExistingServerCertificate"
-    $props = @{ f= 'json';  alias = $CertAlias; certPassword = $CertificatePassword.GetNetworkCredential().Password  }
-    # Conditionally add importCertificateChain if Version is >= 11.3
-    if ($Version -and ([version]$Version -ge [version]"11.3") `
-    -and (-not($ServerType -ieq "NotebookServer" -or $ServerType -ieq "MissionServer" -or $ServerType -ieq "VideoServer"))) {
-        $props["importCertificateChain"] = $ImportCertificateChain
-    }
-
-    $Header = @{}
-    if(-not($ServerType -ieq "NotebookServer" -or $ServerType -ieq "MissionServer" -or $ServerType -ieq "VideoServer")){
-        $props["token"] = $Token;
-    }else{
-        $Header["X-Esri-Authorization"] = "Bearer $Token"
-    }
-
-    $res = Invoke-UploadFile -url $ImportCACertUrl -filePath $CertificateFilePath -fileContentType 'application/x-pkcs12' -formParams $props -Referer $Referer -fileParameterName 'certFile' -httpHeaders $Header -Verbose 
-    if($res) {
-        $response = $res | ConvertFrom-Json
-        Confirm-ResponseStatus $response -Url $ImportCACertUrl
-    } else {
-        Write-Verbose "[WARNING] Response from $ImportCACertUrl was $res"
-    }
-}
-
-function Import-RootOrIntermediateCertificate
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerUrl,
-
-        [System.String]
-        $Token, 
-
-        [System.String]
-        $Referer, 
-
-        [string]
-        $MachineName,
-
-        [System.String]
-        $CertAlias, 
-
-        [System.String]
-        $CertificateFilePath
-    )
-    
-    $ImportCertUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/sslCertificates/importRootOrIntermediate"
-    $props = @{ f= 'json'; token = $Token; alias = $CertAlias; } 
-    $res = Invoke-UploadFile -url $ImportCertUrl -filePath $CertificateFilePath -fileContentType 'application/x-pkcs12' -formParams $props -Referer $Referer -fileParameterName 'rootCACertificate'    
-    if($res) {
-        $response = $res | ConvertFrom-Json
-        Confirm-ResponseStatus $response -Url $ImportCACertUrl
-    } else {
-        Write-Verbose "[WARNING] Response from $ImportCertUrl was null"
-    }
-}
-
-function Update-SSLCertificate
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerURL, 
-        
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $MachineName,
-
-        [System.String]
-        $Referer, 
-        
-        $MachineProperties,
-        
-        [System.Int32]
-        $MaxAttempts = 5,
-
-        [System.Int32]
-        $SleepTimeInSecondsBetweenAttempts = 30
-    )
-
-    $UpdateSSLCertUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/edit"
-    $MachineProperties.psobject.properties | Foreach-Object -begin {$h=@{}} -process {$h."$($_.Name)" = $_.Value} -end {$h} # convert PSCustomObject to hashtable
-    
-    if($ServerURL -imatch "6443"){
-        $h.ports = $null
-    }
-
-    $h.f = 'json'
-    $h.token = $Token
-    [bool]$Done = $false
-    [int]$Attempt = 1
-    while(-not($Done) -and $Attempt -le $MaxAttempts) 
-    {
-        $AttemptStr = ''
-        if($Attempt -gt 1) {
-            $AttemptStr = "Attempt # $Attempt"              
-        }
-        Write-Verbose "Update SSLCert Name $AttemptStr"
-        try {    
-            $response = Invoke-ArcGISWebRequest -Url $UpdateSSLCertUrl -HttpFormParameters $h -Referer $Referer -TimeOutSec 150 -Verbose
-            if($response.status -ieq 'success'){
-                Write-Verbose "Update Web Server SSL Certificate Successful! Server will Restart now."
-                $Done = $true
-            }else{
-                if(($response.status -ieq 'error') -and $response.messages){
-                    Write-Verbose "[WARNING]:- $($response.messages -join ',')"
-                }else{
-                    Write-Verbose "[WARNING]:- $($response | ConvertTo-Json -Depth 10)"
-                }
-            }
-        }
-        catch
-        {                
-            if($Attempt -ge $MaxAttempts) {
-                Write-Verbose "[WARNING] Update failed after $MaxAttempts. Last Response:- $($_)"
-                #throw "Update failed after $MaxAttempts. Error:- $($_)"
-            }
-        }
-        if(-not($Done)){
-            Start-Sleep -Seconds $SleepTimeInSecondsBetweenAttempts
-        }
-        
-        $Attempt++
-    }
-    $response
-}
-
-function Get-Machines
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerURL, 
-        
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $Referer
-    )
-    $GetMachinesUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/"
-    Invoke-ArcGISWebRequest -Url $GetMachinesUrl -HttpFormParameters @{ f= 'json'; token = $Token; } -Referer $Referer -HttpMethod 'GET' -TimeoutSec 150
-}
-
-function Get-MachineDetails
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerURL, 
-        
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $Referer, 
-        
-        [System.String]
-        $MachineName
-    )
-    $GetMachineDetailsUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/"
-    Invoke-ArcGISWebRequest -Url $GetMachineDetailsUrl -HttpFormParameters @{ f= 'json'; token = $Token; } -Referer $Referer -HttpMethod 'GET' -TimeoutSec 150
-}
-
-function Get-AllSSLCertificateForMachine
-{
-    [CmdletBinding()]
-    param(
-        [System.String]
-        $ServerURL, 
-        
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $Referer, 
-        
-        [System.String]
-        $MachineName
-    )
-    $certURL = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/sslCertificates/"
-    Invoke-ArcGISWebRequest -Url $certURL -HttpFormParameters @{ f= 'json'; token = $Token; } -Referer $Referer -HttpMethod 'GET' 
-}
-
-function Get-SSLCertificateForMachine
-{
-    [CmdletBinding()]
-    [OutputType([System.Collections.Hashtable])]
-    param(
-        [System.String]
-        $ServerURL, 
-        
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $Referer, 
-        
-        [System.String]
-        $MachineName, 
-        
-        [System.String]
-        $SSLCertName
-    )
-    $CertUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/machines/$MachineName/sslCertificates/$SSLCertName"
-    try{
-        $json = Invoke-ArcGISWebRequest -Url $CertUrl -HttpFormParameters @{ f= 'json'; token = $Token; } -Referer $Referer -HttpMethod 'GET'  
-        if($json.error){
-            $errMsgs = ($json.error.messages -join ', ')
-            Write-Verbose "[WARNING] Response from $CertUrl is $errMsgs"
-            $null
-        }elseif($json.status -and $json.status -ieq "error"){
-            $errMsgs = ($json.messages -join ', ')
-            Write-Verbose "[WARNING] Response from $CertUrl is $errMsgs"
-            $null
-        }else{
-            $issuer = $json.issuer
-            $thumbprint = $json.sha1Fingerprint
-            @{
-                Issuer = $issuer
-                Thumbprint = $thumbprint
-            }
-        }
-    }
-    catch{
-        # If no cert exists, an error is returned
-        Write-Verbose "[WARNING] Error checking $CertUrl Error:- $_"
-        $null
-    }
-}
-function Update-SecurityConfig
-{
-    [CmdletBinding()]
-    param(
-		[System.String]
-        $ServerURL, 
-
-        [System.String]
-        $Token, 
-
-        [System.String]
-        $Referer,
-
-        $SecurityConfig,
-
-        [System.Boolean]
-        $EnableHTTPSOnly,
-        
-        [System.Boolean]
-        $EnableHSTS
-    ) 
-
-    if(-not($SecurityConfig)) {
-        throw "Security Config parameter is not provided"
-    }
-
-    $UpdateSecurityConfigUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/security/config/update"
-    $props = @{
-        f= 'json';
-        token = $Token;
-        httpsProtocols = if($null -eq $SecurityConfig.httpsProtocols) {"TLSv1.2,TLSv1.1,TLSv1"}else{$SecurityConfig.httpsProtocols};
-        cipherSuites = $SecurityConfig.cipherSuites;
-        Protocol = if($EnableHTTPSOnly){ "HTTPS" }else{ "HTTP_AND_HTTPS" };
-        authenticationTier = $SecurityConfig.authenticationTier;
-        HSTSEnabled = "$EnableHSTS";
-        portalProperties = (ConvertTo-Json $SecurityConfig.portalProperties -Compress);
-        allowedAdminAccessIPs= if($null -eq $SecurityConfig.allowedAdminAccessIPs) { "" }else{$SecurityConfig.allowedAdminAccessIPs};
-        allowDirectAccess= $SecurityConfig.allowDirectAccess ;
-        allowInternetCORSEnabled= $SecurityConfig.allowInternetCORSAccess;
-        virtualDirsSecurityEnabled = $SecurityConfig.virtualDirsSecurityEnabled;
-    }
-    Invoke-ArcGISWebRequest -Url $UpdateSecurityConfigUrl -HttpFormParameters $props -Referer $Referer -TimeOutSec 300 -Verbose
-}
-
-function Get-SecurityConfig
-{
-    [CmdletBinding()]
-    param(
-		[System.String]
-        $ServerURL,
-        
-        [System.String]
-        $Token, 
-        
-        [System.String]
-        $Referer
-    ) 
-
-    $GetSecurityConfigUrl  = $ServerURL.TrimEnd("/") + "/arcgis/admin/security/config/"
-    Write-Verbose "Url:- $GetSecurityConfigUrl"
-    Invoke-ArcGISWebRequest -Url $GetSecurityConfigUrl -HttpFormParameters @{ f= 'json'; token = $Token; } -Referer $Referer -HttpMethod 'GET' -TimeOutSec 30
-}
-
 
 Export-ModuleMember -Function *-TargetResource

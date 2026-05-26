@@ -4,7 +4,7 @@ function Invoke-CreatePostgreSQLSDEIfNotExist
     param
 	(
         [System.String]
-        [ValidateSet("AzurePostgreSQLDatabase","AzureFlexiblePostgreSQLDatabase")]
+        [ValidateSet("AzureFlexiblePostgreSQLDatabase","AWSRDSPostgreSQLDatabase","AWSAuroraPostgreSQLDatabase")]
         $DatabaseType,
 
         [System.String]
@@ -22,7 +22,6 @@ function Invoke-CreatePostgreSQLSDEIfNotExist
         [PSCredential]
         $DatabaseUser,
 
-
         [System.Boolean]
         $EnableGeodatabase
     )
@@ -33,11 +32,12 @@ function Invoke-CreatePostgreSQLSDEIfNotExist
     Test-ConnectivityToPostgresServer -Server $DatabaseServer -Database "postgres" `
                             -Credential $DatabaseServerAdministrator -DatabaseType $DatabaseType `
                             -UseArcGISServerPostgreSQLLibpqInterop $UseArcGISServerPostgreSQLLibpqInteropType -Verbose
+    
     Write-Verbose "Connection to database server $($DatabaseServer) successful."
-
     $TestDBConnString = Get-PostgresDatabaseConnectionString -Server $DatabaseServer -Database "postgres" `
                             -Credential $DatabaseServerAdministrator -DatabaseType $DatabaseType `
                             -UseArcGISServerPostgreSQLLibpqInterop $UseArcGISServerPostgreSQLLibpqInteropType
+
     ###
     ### Ensure Database existsf
     ###                
@@ -91,7 +91,7 @@ function Invoke-CreatePostgreSQLSDEIfNotExist
     ##
     ## Grant necessary privilages to Geodatabase Administrator 'sde'
     ##
-    Grant-PrivilegesForPostgresGeodatabaseAdministrator -ConnString $DbConnString -UserName $SdeUserName
+    Grant-PrivilegesForPostgresGeodatabaseAdministrator -ConnString $DbConnString -UserName $SdeUserName -DatabaseType $DatabaseType 
 
     ##
     ## Ensure schema 'sde' exists in the database, # Needed Schema for ArcSDE
@@ -450,12 +450,13 @@ function Grant-PrivilegesForPostgresGeodatabaseAdministrator
 
         [System.String]
         $UserName,
-       
-        [switch]
-        $GrantViewDatabaseState
+
+        [System.String]
+        $DatabaseType
     )
     
-    $sql ="GRANT azure_pg_admin TO $UserName";
+    $roleName = if($DatabaseType -ieq "AzureFlexiblePostgreSQLDatabase"){"azure_pg_admin"}else{"rds_superuser"}
+    $sql ="GRANT $($roleName) TO $UserName";
     Invoke-ExecutePostgresQuery -ConnString $ConnString -sql $sql
 }
 
@@ -576,25 +577,15 @@ function Invoke-ExecutePostgresQuery{
         }
 
         $exeArgsHash = "-h $HostName -p $Port -U $UserName -c ""$($sql)"" -w $Database"
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $PsqlExePath
-        $psi.Arguments =  $exeArgsHash
-        $psi.UseShellExecute = $false #start the process from it's own executable file    
-        $psi.RedirectStandardOutput = $true #enable the process to read from standard output
-        $psi.RedirectStandardError = $true #enable the process to read from standard error
-        $psi.EnvironmentVariables["PGPASSWORD"] = $Password
-        $p = [System.Diagnostics.Process]::Start($psi)
-        $p.WaitForExit()
-        $op = $p.StandardOutput.ReadToEnd()
-        $err = $p.StandardError.ReadToEnd()
-        
-        if($p.ExitCode -eq 0) {                    
-            Write-Verbose "Query '$($sql)' - Executed Successfully!"
-            if($op -and $op.Length -gt 0) {
-                return $op
+        try{
+            $EnvVariables = @{
+                "PGPASSWORD" = $Password
             }
-        }else {
-            throw "Error executing query: $err"
+
+            Invoke-StartProcess -ExecPath $PsqlExePath -Arguments $exeArgsHash -EnvVariables $EnvVariables -Verbose
+            Write-Verbose "Query '$($sql)' - Executed Successfully!"
+        }catch{
+            throw "Error executing query: $_"
         }
     }
 }
@@ -621,7 +612,7 @@ function Get-PostgresDatabaseConnectionString
     )
 
     
-    $UserId = if($DatabaseType -ieq "AzurePostgreSQLDatabase"){ "$($Credential.UserName)@$($Server.Split(".")[0])" }else{ $Credential.UserName }
+    $UserId = $Credential.UserName
     $InstallerPath = "None"
     $Driver = ""
 

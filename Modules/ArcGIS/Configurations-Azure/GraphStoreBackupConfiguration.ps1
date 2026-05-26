@@ -3,7 +3,7 @@ Configuration GraphStoreBackupConfiguration{
     param(
         [Parameter(Mandatory=$false)]
         [System.String]
-        $Version = "12.0"
+        $Version = "12.1"
 
         ,[Parameter(Mandatory=$false)]
         [System.Management.Automation.PSCredential]

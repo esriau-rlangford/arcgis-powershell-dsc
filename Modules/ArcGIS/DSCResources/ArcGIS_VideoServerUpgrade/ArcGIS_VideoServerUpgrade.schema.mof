@@ -1,7 +1,0 @@
-﻿[ClassVersion("1.0.0.0"), FriendlyName("ArcGIS_VideoServerUpgrade")]
-class ArcGIS_VideoServerUpgrade : OMI_BaseResource
-{
-	[Key] String ServerHostName;
-	[Write] String Version;
-};
-
