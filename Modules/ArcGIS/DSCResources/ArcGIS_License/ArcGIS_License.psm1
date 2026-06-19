@@ -9,15 +9,15 @@ Import-Module -Name (Join-Path -Path $modulePath `
     .SYNOPSIS
         Licenses the product (Server or Portal) depending on the params specified.
     .PARAMETER Ensure
-        Take the values Present or Absent. 
+        Take the values Present or Absent.
         - "Present" ensures that Component in Licensed, if not.
         - "Absent" ensures that Component in Unlicensed (Not Implemented).
     .PARAMETER LicenseFilePath
-        Path to License File 
+        Path to License File
     .PARAMETER LicensePassword
-        Optional Password for the corresponding License File 
+        Optional Password for the corresponding License File
     .PARAMETER Version
-        Optional Version for the corresponding License File 
+        Optional Version for the corresponding License File
     .PARAMETER Component
         Product being Licensed (Server or Portal)
     .PARAMETER ServerRole
@@ -42,7 +42,7 @@ function Get-TargetResource
 		$LicenseFilePath
 	)
 
-	@{} 
+	@{}
 }
 
 function Set-TargetResource
@@ -53,7 +53,7 @@ function Set-TargetResource
 		[parameter(Mandatory = $true)]
 		[System.String]
         $LicenseFilePath,
-        
+
         [parameter(Mandatory = $false)]
 		[System.Management.Automation.PSCredential]
         $LicensePassword,
@@ -74,14 +74,14 @@ function Set-TargetResource
 		[System.String]
         $ServerRole = 'GeneralPurposeServer',
 
-        [parameter(Mandatory = $False)]    
+        [parameter(Mandatory = $False)]
         [System.Array]
         $AdditionalServerRoles,
 
         [parameter(Mandatory = $false)]
         [System.Boolean]
         $IsSingleUse,
-        
+
         [parameter(Mandatory = $false)]
         [System.Boolean]
 		$Force= $False
@@ -93,13 +93,13 @@ function Set-TargetResource
 
     if($Ensure -ieq 'Present') {
         $LicenseVersion = Get-LicenseVersion -Component $Component -ServerRole $ServerRole -Version $Version -Verbose
-        Write-Verbose "Licensing from $LicenseFilePath" 
+        Write-Verbose "Licensing from $LicenseFilePath"
         if(@('Pro', 'LicenseManager') -icontains $Component) {
-            Write-Verbose "Version $LicenseVersion Component $Component" 
+            Write-Verbose "Version $LicenseVersion Component $Component"
             Invoke-LicenseSoftware -Product $Component -LicenseFilePath $LicenseFilePath `
                         -Version $LicenseVersion -LicensePassword $LicensePassword -IsSingleUse $IsSingleUse -Verbose
         } else {
-            Write-Verbose "Version $LicenseVersion Component $Component Role $ServerRole" 
+            Write-Verbose "Version $LicenseVersion Component $Component Role $ServerRole"
             Invoke-LicenseSoftware -Product $Component -ServerRole $ServerRole -LicenseFilePath $LicenseFilePath `
                         -Version $LicenseVersion -LicensePassword $LicensePassword -IsSingleUse $IsSingleUse -Verbose
         }
@@ -118,7 +118,7 @@ function Test-TargetResource
 		[parameter(Mandatory = $true)]
 		[System.String]
         $LicenseFilePath,
-        
+
         [parameter(Mandatory = $false)]
 		[System.Management.Automation.PSCredential]
 		$LicensePassword,
@@ -139,22 +139,22 @@ function Test-TargetResource
 		[System.String]
         $ServerRole = 'GeneralPurposeServer',
 
-        [parameter(Mandatory = $False)]    
+        [parameter(Mandatory = $False)]
         [System.Array]
         $AdditionalServerRoles,
 
         [parameter(Mandatory = $false)]
         [System.Boolean]
         $IsSingleUse,
-        
+
         [parameter(Mandatory = $false)]
         [System.Boolean]
 		$Force = $False
 	)
-    
+
     $result = $false
     $LicenseVersion = Get-LicenseVersion -Component $Component -ServerRole $ServerRole -Version $Version -Verbose
-    
+
     if($Component -ieq 'Pro') {
         Write-Verbose "TODO:- Check for Pro license. For now forcing Software Authorization Tool to License Pro."
     }
@@ -183,11 +183,11 @@ function Test-TargetResource
             }
         }
     }
-    
+
     if($Ensure -ieq 'Present') {
-	    $result   
+	    $result
     }
-    elseif($Ensure -ieq 'Absent') {        
+    elseif($Ensure -ieq 'Absent') {
         (-not($result))
     }
 }
@@ -209,6 +209,7 @@ function Get-LicenseVersion{
     [string]$RealVersion = @()
     if(-not($Version)){
         try{
+            $Version = null # Resetting the Version to null to get the real version of the product
             $ErrorActionPreference = "Stop"; #Make all errors terminating
             $ComponentName = Get-ArcGISProductName -Name $Component -Version $Version
             if($Component -ieq "Server"){
@@ -219,17 +220,17 @@ function Get-LicenseVersion{
 
             $RealVersion = (Get-ArcGISProductDetails -ProductName $ComponentName).Version
         }catch{
-            throw "Couldn't find the product - $Component"            
+            throw "Couldn't find the product - $Component"
         }finally{
             $ErrorActionPreference = "Continue"; #Reset the error action pref to default
         }
     }else{
         $RealVersion = $Version
     }
-    Write-Verbose "RealVersion of ArcGIS Software:- $RealVersion" 
+    Write-Verbose "RealVersion of ArcGIS Software:- $RealVersion"
     $RealVersionString = "$(([version]$RealVersion).Major).$(([version]$RealVersion).Minor)"
     $LicenseVersion = if($Component -ieq 'Pro' -or $Component -ieq 'LicenseManager'){ '10.6' }else{ $RealVersionString }
-    Write-Verbose "Version $LicenseVersion" 
+    Write-Verbose "Version $LicenseVersion"
     return $LicenseVersion
 }
 
@@ -240,20 +241,20 @@ function Invoke-LicenseSoftware
     param
     (
 		[System.String]
-        $Product, 
+        $Product,
 
         [System.String]
         $ServerRole,
-        
+
         [System.String]
-		$LicenseFilePath, 
-        
+		$LicenseFilePath,
+
         [System.Management.Automation.PSCredential]
-        $LicensePassword, 
-        
+        $LicensePassword,
+
 		[System.String]
 		$Version,
-        
+
         [System.Boolean]
         $IsSingleUse
     )
@@ -277,15 +278,15 @@ function Invoke-LicenseSoftware
     }else{
         if($Product -ieq "Server"){
             $ServerTypeName = "ArcGIS Server"
-            if($ServerRole -ieq "NotebookServer"){ 
-                $ServerTypeName = "ArcGIS Notebook Server" 
-            }elseif($ServerRole -ieq "MissionServer"){ 
+            if($ServerRole -ieq "NotebookServer"){
+                $ServerTypeName = "ArcGIS Notebook Server"
+            }elseif($ServerRole -ieq "MissionServer"){
                 $ServerTypeName = "ArcGIS Mission Server"
-            }elseif($ServerRole -ieq "VideoServer"){ 
+            }elseif($ServerRole -ieq "VideoServer"){
                 $ServerTypeName = "ArcGIS Video Server"
-            }elseif($ServerRole -ieq "DataPipelinesServer"){ 
+            }elseif($ServerRole -ieq "DataPipelinesServer"){
                 $ServerTypeName = "ArcGIS Data Pipelines Server"
-            }elseif($ServerRole -ieq "GeoEnrichmentServer"){ 
+            }elseif($ServerRole -ieq "GeoEnrichmentServer"){
                 $ServerTypeName = "GeoEnrichmentServer"
             }
 
@@ -306,7 +307,7 @@ function Invoke-LicenseSoftware
         }
     }
     Write-Verbose "Licensing Product [$Product] using Software Authorization Utility at $SoftwareAuthExePath" -Verbose
-    
+
     $Params = '-s -ver {0} -lif "{1}"' -f $Version,$licenseFilePath
     $RedactedArguments = '-s -ver {0} -lif "{1}"' -f $Version,$licenseFilePath
     if($null -ne $LicensePassword){
@@ -314,7 +315,7 @@ function Invoke-LicenseSoftware
         $RedactedArguments = '-s -ver {0} -lif "{1}" -password {2}' -f $Version,$licenseFilePath,"xxxxx"
     }
     Write-Verbose "[Running Command] $SoftwareAuthExePath $RedactedArguments" -Verbose
-    
+
     [bool]$Done = $false
     [int]$AttemptNumber = 1
     $err = $null
@@ -375,9 +376,9 @@ function Test-LicenseForRole{
         [System.String]
         $ServerRole
     )
-    
+
     $file = "$env:SystemDrive\Program Files\ESRI\License$($LicenseVersion)\sysgen\keycodes"
-    if(Test-Path $file){ 
+    if(Test-Path $file){
         $result = $true
         $KeyCodesFileContents = Get-Content $file
 
@@ -403,7 +404,7 @@ function Test-LicenseForRole{
             if($ServerRole -ieq 'GeoAnalytics') {
                 $searchtexts = @('geoesvr')
             }
-            if($ServerRole -ieq 'KnowledgeServer'){ 
+            if($ServerRole -ieq 'KnowledgeServer'){
                 $searchtexts = @('knwldgsvr')
             }
             if($ServerRole -ieq 'NotebookServer') {
@@ -425,7 +426,7 @@ function Test-LicenseForRole{
                 $searchtexts = @('businesssvr') # TODO - Check for "svradv"
             }
         }
-        
+
         # All of the search texts should exist in the keygen
         $TextFound = $False
         foreach($KeyCodeLine in $KeyCodesFileContents){
