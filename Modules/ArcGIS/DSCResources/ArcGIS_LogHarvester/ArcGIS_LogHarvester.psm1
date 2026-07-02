@@ -165,7 +165,7 @@ function Set-TargetResource
     [Environment]::SetEnvironmentVariable("ARCGIS_LOG_APPENDER", "agol", 'Machine')
 
     #Restart Component
-    Restart-ArcGISService -ComponentName ComponentType -Verbose
+    Restart-ArcGISService -ComponentName $ComponentType -Verbose
 
     if($ComponentType -eq "Server"){
         $FQDN = if($HostName){ Get-FQDN $HostName }else{ Get-FQDN $env:COMPUTERNAME }
