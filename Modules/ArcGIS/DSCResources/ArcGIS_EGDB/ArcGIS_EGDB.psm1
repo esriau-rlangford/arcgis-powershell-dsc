@@ -371,7 +371,7 @@ function Test-TargetResource
 
     # Check if database name is mixed. Not supported by ArcGIS
     if($DatabaseName -cne $DatabaseName.ToLower()){
-        throw "Uppercase and mixed-case object names are not supported for geodatabases in PostgreSQL."
+        throw "Uppercase and mixed-case object names are not supported for geodatabases."
     }
 
     # $DatabaseServerToCheck = if($IsManaged) { $null } else { $DatabaseServer }

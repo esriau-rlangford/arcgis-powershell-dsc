@@ -974,7 +974,14 @@ function Invoke-ArcGISConfiguration
             $LicenseManagerCheck = (($ConfigurationParamsHashtable.AllNodes | Where-Object { $_.Role -icontains 'LicenseManager' } | Measure-Object).Count -gt 0)
             
             $ServerSkipLicenseStep = -not($null -ne $EnterpriseVersion -and $ServerCheck)
-            $ProSkipLicenseStep = -not($ConfigurationParamsHashtable.ConfigData.ProVersion -and $ProCheck -and (($ConfigurationParamsHashtable.ConfigData.Pro.AuthorizationType -ieq "NAMED_USER") -or ($ConfigurationParamsHashtable.ConfigData.Pro.AuthorizationType -ieq "CONCURRENT_USE" -and -not($LicenseManagerCheck))))
+            $ProSkipLicenseStep = $true
+            if($ConfigurationParamsHashtable.ConfigData.ProVersion -and $ProCheck){
+                $ProSkipLicenseStep = $false
+                if(($ConfigurationParamsHashtable.ConfigData.Pro.AuthorizationType -ieq "NAMED_USER") -or 
+                ($ConfigurationParamsHashtable.ConfigData.Pro.AuthorizationType -ieq "CONCURRENT_USE" -and -not($LicenseManagerCheck))){
+                    $ProSkipLicenseStep = $true
+                }
+            }
             
             $LicenseManagerSkipLicenseStep = -not($ConfigurationParamsHashtable.ConfigData.LicenseManagerVersion -and $LicenseManagerCheck -and $ConfigurationParamsHashtable.ConfigData.LicenseManager.LicenseFilePath)
 
@@ -1095,7 +1102,7 @@ function Invoke-ArcGISConfiguration
                             $NodeToAdd.Role += "Pro"
 
                             $ProLicenseFilePath = $ConfigurationParamsHashtable.ConfigData.Pro.LicenseFilePath
-                            $ProLicensePassword = Resolve-SecretFromObject -Object $ConfigurationParamsHashtable.ConfigData.WorkflowManagerServer -Prefix 'LicensePassword'
+                            $ProLicensePassword = Resolve-SecretFromObject -Object $ConfigurationParamsHashtable.ConfigData.Pro -Prefix 'LicensePassword'
                             
                             # Per Node - Pro
                             if($Node.ProLicenseFilePath)
@@ -2319,7 +2326,7 @@ function Invoke-ArcGISConfiguration
                             'ServerAdminContext'
                         )
 
-                        $HasFederationServerOverrides = $false
+                        $HasFederationServerOverrides = $true
                         foreach ($Key in $RequiredFederationServerKeys) {
                             if (-not $FederationConfig.ContainsKey($Key) -or -not $FederationConfig[$Key]) {
                                 $HasFederationServerOverrides = $false
@@ -2327,6 +2334,8 @@ function Invoke-ArcGISConfiguration
                             }
                         }
                         if ($HasFederationServerOverrides) {
+                            Write-Information "Applying federation server endpoint overrides from ConfigData.Federation"
+
                             $ServerDetails.ServerServiceURL        = $FederationConfig.ServerHostName
                             $ServerDetails.ServerServiceURLPort    = $FederationConfig.ServerUrlPort
                             $ServerDetails.ServerServiceURLContext = $FederationConfig.ServerContext
@@ -2334,6 +2343,8 @@ function Invoke-ArcGISConfiguration
                             $ServerDetails.ServerSiteAdminURL      = $FederationConfig.ServerAdminHostName
                             $ServerDetails.ServerSiteAdminURLPort  = $FederationConfig.ServerAdminUrlPort
                             $ServerDetails.ServerSiteAdminContext  = $FederationConfig.ServerAdminContext
+                        }else {
+                            Write-Information "Federation server endpoint overrides were not applied because one or more required keys are missing/empty in ConfigData.Federation. Using discovered server endpoint values."
                         }
                     }else{
                         if($PortalCheck){

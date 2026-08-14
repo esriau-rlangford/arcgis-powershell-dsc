@@ -64,6 +64,7 @@ function Test-TargetResource
 		$Referer = 'https://localhost'
         $PortalBaseURL = $PortalEndPoint.TrimEnd("/") + "/arcgis"
 		$token = Get-PortalToken -URL $PortalBaseURL -Credential $PortalAdministrator -Referer $Referer
+        $StandbyMachineHostName = Get-FQDN $StandbyMachine
         $StandbyFlag = Test-MachineInPortalSite -URL $PortalBaseURL -Credential $PortalAdministrator -Token $token.token -MachineFQDN $StandbyMachineHostName
 		$result = -not($StandbyFlag)
 	}
@@ -102,7 +103,7 @@ function Set-TargetResource
     Write-Verbose "Unregistering $StandbyMachine Portal"
     $StandbyMachineHostName = Get-FQDN $StandbyMachine
     $StandbyMachine = ((Get-MachinesInPortalSite -URL $PortalBaseURL -Token $token.token -Referer $Referer) | Where-Object { $_.machineName -ieq $StandbyMachineHostName } | Select-Object -First 1)
-    Unregister-PortalSiteMachine -URL $PortalBaseURL -Token $token.token -Referer $Referer -MachineFQDN $StandbyMachineName.machineName -Verbose
+    Unregister-PortalSiteMachine -URL $PortalBaseURL -Token $token.token -Referer $Referer -MachineFQDN $StandbyMachine.machineName -Verbose
 }
 
 Export-ModuleMember -Function *-TargetResource

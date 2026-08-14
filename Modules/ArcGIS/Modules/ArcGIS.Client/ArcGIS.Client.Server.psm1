@@ -183,7 +183,7 @@ function Invoke-GetDatabaseConnectionGPTool
 
     if(-not($Done))
     {
-        throw "Get Database Connection GP Tool job '$JobId' did not reach 'esriJobSucceeded' after $Count polling attempts. Last status: $LastJobStatus"
+        throw "Get Database Connection GP Tool job '$JobId' did not reach 'esriJobSucceeded' after $NumAttempts polling attempts. Last status: $LastJobStatus"
     }
 
     [string]$OutParamUrl = $ToolPath.TrimEnd('/') + "/jobs/" + "$JobId/$ParamUrl"
@@ -517,31 +517,22 @@ function Update-MachineProperties
     $UpdatePropertiesObject["token"] = $Token
 
     [bool]$Done = $false
-    [int]$Attempt = 1
-    while(-not($Done) -and $Attempt -le $MaxAttempts) 
+    [int]$Attempt = 0
+    while(-not($Done) -and $Attempt -lt $MaxAttempts) 
     {
+        $Attempt++
         $AttemptStr = 'Updating machine properties. '
-        if($Attempt -gt 0) {
-            $AttemptStr += "Attempt #$($Attempt)"
-        }
+        $AttemptStr += "Attempt #$($Attempt)"
         Write-Verbose $AttemptStr
         try {    
             $response = Invoke-ArcGISWebRequest -Url $UpdateMachinePropertiesUrl -HttpFormParameters $UpdatePropertiesObject -Referer $Referer -TimeOutSec 150 -Verbose
-            if($response.status -ieq 'success'){
-                Write-Verbose "Update of machine properties successful! Server will restart now."
-                $Done = $true
-            }else{
-                if(($response.status -ieq 'error') -and $response.messages){
-                    Write-Verbose "[WARNING]:- $($response.messages -join ',')"
-                }else{
-                    Write-Verbose "[WARNING]:- $($response | ConvertTo-Json -Depth 10)"
-                }
-            }
+            Confirm-ResponseStatus $response -Url $UpdateMachinePropertiesUrl
+            Write-Verbose "Update of machine properties successful! Server will restart now."
+            $Done = $true
         }
         catch
         {                
             if($Attempt -ge $MaxAttempts) {
-                #Write-Verbose "[WARNING] Update failed after $MaxAttempts. Response:- $($_)"
                 throw "Machine properties update failed after $MaxAttempts. Error:- $($_)"
             }else{
                 Write-Verbose "[WARNING] Retrying. Machine properties update failed. Response:- $($_)"
@@ -551,7 +542,9 @@ function Update-MachineProperties
             Start-Sleep -Seconds $SleepTimeInSecondsBetweenAttempts
         }
         
-        $Attempt++
+    }
+    if(-not($Done)){
+        throw "Machine properties update failed after $MaxAttempts attempts."
     }
     $response
 }
@@ -909,28 +902,26 @@ function Update-SecurityConfig
     }
 
     $Done = $false
-    $NumAttempts = 1
+    $NumAttempts = 0
     while(-not($Done) -and ($NumAttempts -lt $MaxAttempts)) {
+        $NumAttempts++
         try {
             Write-Verbose "Update Security Config"
-			if($NumAttempts -gt 1) {
-				Write-Verbose "Attempt $NumAttempts"
-			}
+			Write-Verbose "Attempt $NumAttempts"
 			$response = Invoke-ArcGISWebRequest -Url $UpdateSecurityConfigUrl -HttpFormParameters $props -Referer $Referer -TimeOutSec 300 -Verbose
+            Confirm-ResponseStatus $response -Url $UpdateSecurityConfigUrl
             $Done = $true
         }
         catch {
             if($NumAttempts -ge $MaxAttempts){
                 throw $_
             }
-            Write-Verbose "[WARNING] Update security config attempt $NumAttempts failed $($_). Retrying after 60 seconds"
-            Start-Sleep -Seconds 30 # Try again after 60 seconds
+            Write-Verbose "[WARNING] Update security config attempt $NumAttempts failed $($_). Retrying after 30 seconds"
+            Start-Sleep -Seconds 30
         }
-        $NumAttempts++
-    }    
-    if(-not($Done) -and $response){
-        # Throw an exception if we were not able to update config
-        Confirm-ResponseStatus $response -Url $UpdateSecurityConfigUrl
+    }
+    if(-not($Done)){
+        throw "Failed to update security config after $MaxAttempts attempt(s)."
     }
 }
 
@@ -1360,7 +1351,7 @@ function Set-ServerRootAndIntermdiateCertificates
         foreach ($Cert in $MissingCerts){
             if($Cert.Present){
                 Write-Verbose "Thumbprints for Certificate with Alias $($Cert.Alias) doesn't match that of existing cetificate. Deleting existing certificate"
-                $res = Invoke-DeleteSSLCertForMachine -URL $ServerBaseUrl -Token $Token -Referer $Referer -MachineName $MachineName -SSLCertName $Cert.Alias.ToLower()
+                $res = Invoke-DeleteSSLCertForMachine -URL $URL -Token $Token -Referer $Referer -MachineName $MachineName -SSLCertName $Cert.Alias.ToLower()
                 Write-Verbose "Delete existing certificate successful - $($res | ConvertTo-Json)"
             }
 

@@ -6,7 +6,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_RemoteFile
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.1 -Name ArcGIS_RemoteFile
     
     Node $AllNodes.NodeName {
 
@@ -169,6 +169,28 @@
                             FileSourceType = "ArcGISDownloadsAPI"
                             Credential = $AGOCredential
                             ArcGISDownloadAPIFolderPath = "software/arcgis/$($ConfigurationData.ConfigData.Version)"
+                            Ensure = $Ensure
+                        }
+                    }
+
+                    if($ConfigurationData.ConfigData.GeoEnrichmentServer)
+                    {
+                        if($ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.DotnetDesktopRuntimeDownloadUrl){
+                            ArcGIS_RemoteFile "GeoEnrichmentServerDotnetDesktopRuntimeDownload$($Node.NodeName)"{
+                                Source = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.DotnetDesktopRuntimeDownloadUrl
+                                Destination = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.DotnetDesktopRuntimePath 
+                                FileSourceType = "Default"
+                                Ensure = $Ensure
+                            }
+                        }
+                        
+                        ArcGIS_RemoteFile "GeoEnrichmentServerDownload$($Node.NodeName)"
+                        {
+                            Source = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.Path
+                            Destination = $ConfigurationData.ConfigData.GeoEnrichmentServer.Installer.Path
+                            FileSourceType = "ArcGISDownloadsAPI"
+                            Credential = $AGOCredential
+                            ArcGISDownloadAPIFolderPath = "software/ba/$($ConfigurationData.ConfigData.Version)"
                             Ensure = $Ensure
                         }
                     }

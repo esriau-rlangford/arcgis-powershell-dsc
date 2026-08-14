@@ -70,7 +70,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_xFirewall, ArcGIS_Service_Account, ArcGIS_DataStore, ArcGIS_DataStoreBackup, ArcGIS_HostNameSettings
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.1 -Name ArcGIS_xFirewall, ArcGIS_Service_Account, ArcGIS_DataStore, ArcGIS_DataStoreBackup, ArcGIS_HostNameSettings
 
     Node $AllNodes.NodeName 
     {

@@ -46,7 +46,7 @@ function Set-TargetResource
 	[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 	$ServerFQDN = Get-FQDN $ServerHostName
 	Write-Verbose "Fully Qualified Domain Name :- $ServerFQDN"
-   	$ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+   	$ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $ServerFQDN
     $Referer = $ServerBaseUrl
 	
 	Write-Verbose "Getting Server Token for user '$($SiteAdministrator.UserName)' from '$ServerBaseUrl'"
@@ -59,12 +59,16 @@ function Set-TargetResource
 
 	# Push SocMaximumHeapSize if user asked for it
 	if($SocMaximumHeapSize -gt 0){
-        Update-MachineProperties 
+        Update-MachineProperties `
                             -URL            $ServerBaseUrl `
                             -Token          $serverToken.token `
                             -Referer        $Referer `
-                            -MachineName    $FQDN `
+                            -MachineName    $ServerFQDN `
                             -SocMaxHeapSize $SocMaximumHeapSize -Verbose
+        
+        # Restart the ArcGIS Server service
+        # after updating the machine properties before checking the health of the server
+        Restart-ArcGISService -ComponentName "Server" -Verbose
 	}
 
     Write-Verbose "Waiting for Url '$($ServerBaseUrl)'"
@@ -92,7 +96,7 @@ function Test-TargetResource
 	[System.Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
 	$ServerFQDN = Get-FQDN $ServerHostName
     Write-Verbose "Fully Qualified Domain Name :- $ServerFQDN"
-    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $FQDN
+    $ServerBaseUrl = Get-ArcGISComponentBaseUrl -ComponentName "Server" -FQDN $ServerFQDN
     $Referer = $ServerBaseUrl
 	
 	Write-Verbose "Getting Server Token for user '$($SiteAdministrator.UserName)' from '$ServerBaseUrl'"
@@ -110,10 +114,10 @@ function Test-TargetResource
                             -URL $ServerBaseUrl `
                             -Token $serverToken.token `
                             -Referer $Referer `
-                            -MachineName $FQDN
+                            -MachineName $ServerFQDN
 
 		# if the property is missing, or doesn't match the user-supplied value, fail
-		if(-not($Properties.PSObject.Properties.Match('socMaxHeapSize')) -or $Properties.socMaxHeapSize -ne $SocMaximumHeapSize){
+		if(-not($machineDetails.PSObject.Properties.Match('socMaxHeapSize')) -or $machineDetails.socMaxHeapSize -ne $SocMaximumHeapSize){
             Write-Verbose "SocMaximumHeapSize needs to be updated. Expected - $SocMaximumHeapSize, Current - $($machineDetails.socMaxHeapSize)"
             $result = $false
         }

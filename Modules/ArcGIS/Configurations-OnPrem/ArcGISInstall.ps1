@@ -22,7 +22,7 @@
     )
 
     Import-DscResource -ModuleName PSDesiredStateConfiguration
-    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.0 -Name ArcGIS_Install, ArcGIS_InstallMsiPackage, ArcGIS_InstallPatch, ArcGIS_xFirewall, ArcGIS_Tomcat
+    Import-DscResource -ModuleName ArcGIS -ModuleVersion 5.1.1 -Name ArcGIS_Install, ArcGIS_InstallMsiPackage, ArcGIS_InstallPatch, ArcGIS_xFirewall, ArcGIS_Tomcat
 
     Node $AllNodes.NodeName {
 
@@ -582,7 +582,7 @@
                 {
                     # Installation Notes: https://pro.arcgis.com/en/pro-app/get-started/arcgis-pro-installation-administration.htm
                     $PortalList = if($ConfigurationData.ConfigData.Pro.PortalList){ $ConfigurationData.ConfigData.Pro.PortalList }else{ "https://arcgis.com" }
-                    $Arguments = "/qn ACCEPTEULA=YES Portal_List=`"$PortalList`" AUTHORIZATION_TYPE=`"$($ConfigurationData.ConfigData.Pro.AuthorizationType)`""
+                    $Arguments = "/qn ACCEPTEULA=YES PORTAL_LIST=`"$PortalList`" AUTHORIZATION_TYPE=`"$($ConfigurationData.ConfigData.Pro.AuthorizationType)`""
 
                     # TODO: The SOFTWARE_CLASS does not get added if not supported, should this fail? Currently it uses the default handling mechanism. 
                     if ($ConfigurationData.ConfigData.Pro.SoftwareClass){
@@ -622,8 +622,8 @@
                         Name = "Pro"
                         Version = $ConfigurationData.ConfigData.ProVersion
                         Path = $ConfigurationData.ConfigData.Pro.Installer.Path
-                        DotnetDesktopRuntimePath = if([version]($ConfigurationData.ConfigData.ConfigData) -ge "3.0"){ $ConfigurationData.ConfigData.Pro.Installer.DotnetDesktopRuntimePath }else{ $null }
-                        ProEdgeWebView2RuntimePath = if([version]($ConfigurationData.ConfigData.ConfigData) -ge "3.3"){ $ConfigurationData.ConfigData.Pro.Installer.EdgeWebView2RuntimePath }else{ $null }
+                        DotnetDesktopRuntimePath = if([version]($ConfigurationData.ConfigData.ProVersion) -ge "3.0"){ $ConfigurationData.ConfigData.Pro.Installer.DotnetDesktopRuntimePath }else{ $null }
+                        ProEdgeWebView2RuntimePath = if([version]($ConfigurationData.ConfigData.ProVersion) -ge "3.3"){ $ConfigurationData.ConfigData.Pro.Installer.EdgeWebView2RuntimePath }else{ $null }
                         Extract = if($ConfigurationData.ConfigData.Pro.Installer.ContainsKey("IsSelfExtracting")){ $ConfigurationData.ConfigData.Pro.Installer.IsSelfExtracting }else{ $True }
                         Arguments = $Arguments
                         EnableMSILogging = $EnableMSILogging

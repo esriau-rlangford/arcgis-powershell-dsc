@@ -334,7 +334,7 @@ function Get-PatchManifestFromESRIDownloads
 
     $MinifiedVersion = $Version.Replace(".","")
     $PatchNotificationToolUrl = "https://content.esri.com/patch_notification/patches.json"
-    $AllPatches = Invoke-ArcGISWebRequest -Url $PatchNotificationToolUrl -Referer $null -HttpFormParameters @{} -HttpMethod "GET" -Verbose
+    $AllPatches = Invoke-ArcGISWebRequest -Url $PatchNotificationToolUrl -Referer $null -HttpFormParameters @{} -HttpMethod "GET"
 	$ParsedPatchesObject = [ordered]@{}
 	$AllPatchesForVersion = ($AllPatches.Product | Where-Object { $_.Version -ieq $Version })
 	if($null -ne $AllPatchesForVersion){
